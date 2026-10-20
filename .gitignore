@@ -17,3 +17,6 @@ Thumbs.db
 
 # reference checkouts live outside this repo
 reference/
+
+# local launch config
+.claude/launch.json
