@@ -1,0 +1,19 @@
+# dependencies / build
+node_modules/
+dist/
+*.tgz
+
+# local state
+.workbench/
+.nativue/
+artifacts/
+*.log
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# reference checkouts live outside this repo
+reference/
