@@ -52,10 +52,10 @@ export interface StageEntry {
   commits: number;
 }
 
-/** 阶段序列：按首次出现时间排序。 */
+/** 阶段序列：按首次出现时间排序；同一时刻的按提交先后（git log 是新在前，这里倒过来）。 */
 export function stageTimeline(commits: CommitRecord[]): StageEntry[] {
   const map = new Map<string, StageEntry>();
-  for (const c of commits) {
+  for (const c of [...commits].reverse()) {
     if (!c.stage) continue;
     const entry = map.get(c.stage);
     if (!entry) map.set(c.stage, { stage: c.stage, first: c.date, last: c.date, commits: 1 });

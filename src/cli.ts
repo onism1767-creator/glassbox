@@ -12,6 +12,7 @@ const option = (name: string): string | undefined => {
 
 const help = `glassbox · 画布是代码的函数
 
+  glassbox init [仓库]                        写出 .workbench/overlay.yaml 模板，并把 .workbench 加进本地 git 排除
   glassbox doctor                            检查运行环境
   glassbox index [仓库] [--json]              索引文件与 import 图，打印摘要
   glassbox check [仓库] [--overlay 文件]       按规则检验分层违规、零依赖包、禁用词；有违规则退出码 1
@@ -19,6 +20,7 @@ const help = `glassbox · 画布是代码的函数
   glassbox baseline set [仓库] [--reason 文字] [--commit sha]
   glassbox baseline show [仓库]
   glassbox diff [仓库]                        基线到工作区的变更，按顶层目录投影
+  glassbox snapshot [仓库] [--max-commits N]   全量快照：写 状态目录/snapshot.json 与 facts.sqlite
   glassbox help                              显示本帮助
 
   --overlay 文件   用指定的 overlay.yaml 代替仓库内 .workbench/overlay.yaml
@@ -46,6 +48,13 @@ async function main(): Promise<void> {
     case "doctor": {
       const { doctor } = await import("./doctor.ts");
       await doctor();
+      return;
+    }
+    case "init": {
+      const root = resolveRoot(positional[0]);
+      const { initWorkspace } = await import("./init.ts");
+      const { overlayFile, created, excluded } = initWorkspace(root);
+      process.stdout.write(`${created ? "已写出" : "已存在，未覆盖"}：${overlayFile}\n${excluded ? "已把 /.workbench/ 加进 .git/info/exclude\n" : ""}`);
       return;
     }
     case "index": {
@@ -88,6 +97,15 @@ async function main(): Promise<void> {
         return;
       }
       throw new Error("用法: glassbox baseline set|show [仓库]");
+    }
+    case "snapshot": {
+      const root = resolveRoot(positional[0]);
+      const state = stateDirFor(root);
+      const { writeSnapshot, summarizeSnapshot } = await import("./snapshot.ts");
+      const max = option("max-commits") ? Number(option("max-commits")) : undefined;
+      const { snapshot, jsonPath, dbPath } = await writeSnapshot(root, { stateDir: state, overlayFile: option("overlay"), ...(max ? { maxCommits: max } : {}) });
+      process.stdout.write(summarizeSnapshot(snapshot) + `已写出 ${jsonPath}\n已写出 ${dbPath}\n`);
+      return;
     }
     case "diff": {
       const root = resolveRoot(positional[0]);
