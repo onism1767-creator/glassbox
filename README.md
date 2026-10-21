@@ -24,6 +24,8 @@
 2. [nativue-ai 评估与接入方案](nativue-ai%20评估与接入方案.md)：对参照项目的逐项评估
 3. [设计稿 v1](设计稿-v1-代码驱动的实时仪表盘.md)：原则与真相分级
 4. [设计稿 v1.1](设计稿-v1.1.md)：定稿，含每一步的技术实现方式与备选
+5. [设计稿 v1.2](设计稿-v1.2.md)：宏观文档读取、每任务进度条与预计时间，每个数字标来源与真相等级
+6. [阶段 1 对照记录](docs/阶段1-对照/阶段1-对照记录.md)：原版 nativue-ai 在 GEO 工具上的 Windows 实测
 
 技术决定：TypeScript on Node 24；tree-sitter 做语法结构；Sourcegraph SCIP 索引器做符号级调用图；node:sqlite 做事实库；React Flow 加 ELK 做画布；任务是仓库内 Markdown 文件；Claude Code hooks 做实时事件，协议本身与 AI 工具无关。
 
