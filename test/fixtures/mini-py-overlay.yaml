@@ -1,0 +1,10 @@
+version: 1
+layers:
+  from_guard_test:
+    file: tests/test_layers.py
+isolated_packages: [util]
+forbidden_words:
+  - dirs: [app]
+    match: word
+    words: [openai, gemini]
+    source: fixture

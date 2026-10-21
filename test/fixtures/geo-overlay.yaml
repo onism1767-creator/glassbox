@@ -1,0 +1,20 @@
+# GEO 工具的 overlay：规则尽量指向项目自己的守卫测试与配置，而不是抄一份。
+version: 1
+exclude: []
+layers:
+  from_guard_test:
+    file: tests/unit/test_layer_dependencies.py
+    layer_var: LAYER
+    allowed_var: ALLOWED
+isolated_packages:
+  - crawler
+forbidden_words:
+  - dirs: [engine, diagnosis]
+    match: substring
+    words_from:
+      file: config/surfaces.yaml
+      list: surfaces
+      fields: [provider, name]
+      split: { field: name, sep: "_", exclude: [web, search, agent, api, mode] }
+    source: "CLAUDE.md 硬边界 2；tests/unit/test_no_provider_strings.py"
+stage_tag: 'v\d+(?:\.\d+)*\s+S\d+(?:\.\d+)?[a-z]?'

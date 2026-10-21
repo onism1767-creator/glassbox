@@ -20,3 +20,6 @@ reference/
 
 # local launch config
 .claude/launch.json
+
+# tooling
+node_modules/
