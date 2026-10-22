@@ -23,6 +23,7 @@ const help = `glassbox · 画布是代码的函数
   glassbox baseline show [仓库]
   glassbox diff [仓库]                        基线到工作区的变更，按顶层目录投影
   glassbox snapshot [仓库] [--max-commits N]   全量快照：写 状态目录/snapshot.json 与 facts.sqlite
+  glassbox serve [仓库] [--port 4400] [--refresh]  启动画布服务（先 npm run web:build）；无快照时自动生成
   glassbox help                              显示本帮助
 
   --overlay 文件   用指定的 overlay.yaml 代替仓库内 .workbench/overlay.yaml
@@ -119,6 +120,13 @@ async function main(): Promise<void> {
         return;
       }
       throw new Error("用法: glassbox baseline set|show [仓库]");
+    }
+    case "serve": {
+      const root = resolveRoot(positional[0]);
+      const state = stateDirFor(root);
+      const { serve } = await import("./serve.ts");
+      await serve(root, { stateDir: state, ...indexOptions(), port: Number(option("port") ?? "4400"), refresh: flag("refresh") });
+      return;
     }
     case "snapshot": {
       const root = resolveRoot(positional[0]);

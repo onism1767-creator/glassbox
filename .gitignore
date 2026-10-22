@@ -23,3 +23,6 @@ reference/
 
 # tooling
 node_modules/
+
+# web build
+web/dist/
