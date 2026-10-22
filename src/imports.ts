@@ -86,6 +86,8 @@ function resolvePythonModule(spec: string, level: number, from: string, ctx: Imp
     bases.push(join(dir, ...segments));
   } else {
     for (const root of ctx.pythonRoots) bases.push(join(root === "." ? "" : root, ...segments));
+    // 脚本目录也在 sys.path 上（直接运行脚本、pytest 的测试目录）：最后再试一下和导入方同一个目录。
+    bases.push(join(path.posix.dirname(from), ...segments));
   }
   for (const base of bases) {
     for (const suffix of PY_SUFFIXES) {

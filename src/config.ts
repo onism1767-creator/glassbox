@@ -22,6 +22,10 @@ export interface Overlay {
   forbidden_words?: ForbiddenWordsRule[];
   /** 提交信息里的阶段标签正则。 */
   stage_tag?: string;
+  /** 人话名字（T2 声明）：层号 → 名字，目录 → 名字。 */
+  names?: { layers?: Record<string, string>; dirs?: Record<string, string> };
+  /** 项目已有的任务列表文件；没有就用 .workbench/tasks/*.md。 */
+  tasks?: { file: string; format?: "emoji-list" | "standard" };
 }
 
 export interface WordsFromYaml {
@@ -71,7 +75,16 @@ export function readOverlay(root: string, override?: string): Overlay {
     isolated_packages: stringList(o.isolated_packages),
     forbidden_words: o.forbidden_words,
     stage_tag: typeof o.stage_tag === "string" ? o.stage_tag : undefined,
+    names: o.names && typeof o.names === "object" ? { layers: stringMap(o.names.layers), dirs: stringMap(o.names.dirs) } : undefined,
+    tasks: o.tasks && typeof o.tasks === "object" && typeof o.tasks.file === "string" ? { file: o.tasks.file, format: o.tasks.format === "standard" ? "standard" : "emoji-list" } : undefined,
   };
+}
+
+function stringMap(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object") return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) if (typeof v === "string") out[String(k)] = v;
+  return out;
 }
 
 export function stateDir(root: string): string {

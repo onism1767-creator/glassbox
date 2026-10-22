@@ -45,6 +45,10 @@ export interface IndexResult {
   /** 这一轮重新解析的文件（新增、修改、删除）。 */
   changedFiles: string[];
   elapsedMs: number;
+  /** 根目录的依赖清单原文（pyproject.toml、package.json、requirements*.txt）。 */
+  manifests: { path: string; text: string }[];
+  /** overlay 指定的任务列表文件原文。 */
+  taskSource?: { file: string; format: "emoji-list" | "standard"; text: string };
 }
 
 interface CachedFile {
@@ -201,10 +205,17 @@ export class Indexer {
       precise.skipped = "未安装 pyright（npm install pyright）";
     }
     this.ran = true;
+    const manifests: { path: string; text: string }[] = [];
+    for (const e of entries) {
+      const p = e.record.path;
+      if (!p.includes("/") && (p === "pyproject.toml" || p === "package.json" || /^requirements.*\.txt$/.test(p)) && e.content !== undefined) manifests.push({ path: p, text: e.content });
+    }
+    const taskText = overlay.tasks ? this.cache.get(overlay.tasks.file)?.content : undefined;
     return {
       root: this.root, viaGit, overlay, files, imports, edges, pythonRoots, rules, ruleProblems,
       violations: check.violations, allowed: check.allowed, layeredEdges: check.layeredEdges,
-      symbols, calls, precise, changedFiles: changed, elapsedMs: Date.now() - started,
+      symbols, calls, precise, changedFiles: changed, elapsedMs: Date.now() - started, manifests,
+      ...(overlay.tasks && taskText !== undefined ? { taskSource: { file: overlay.tasks.file, format: overlay.tasks.format ?? "emoji-list", text: taskText } } : {}),
     };
   }
 

@@ -18,3 +18,26 @@ forbidden_words:
       split: { field: name, sep: "_", exclude: [web, search, agent, api, mode] }
     source: "CLAUDE.md 硬边界 2；tests/unit/test_no_provider_strings.py"
 stage_tag: 'v\d+(?:\.\d+)*\s+S\d+(?:\.\d+)?[a-z]?'
+# 项目已有的任务列表（✅ 🔨 ⏳ + S 编号），声明层 T2
+tasks:
+  file: docs/任务列表.md
+  format: emoji-list
+# 人话名字：人写的，T2 声明；画布上显示为「人话（目录名）」
+names:
+  layers:
+    "1": 接外部世界的底层
+    "2": 观测引擎
+    "3": 诊断
+    "4": 给用户看的报告和网页
+  dirs:
+    adapters: 接各家 AI 接口的适配器
+    crawler: 网页抓取
+    engine: 观测引擎
+    diagnosis: 诊断
+    report: 报告和网页
+    tests: 测试
+    scripts: 手动脚本
+    config: 配置文件
+    docs: 文档
+    ".claude": Claude 配置
+    ".": 根目录（规格与工程配置）

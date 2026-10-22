@@ -3,6 +3,9 @@ layers:
   from_guard_test:
     file: tests/test_layers.py
 isolated_packages: [util]
+names:
+  layers: { "1": 底层, "2": 业务, "3": 网页 }
+  dirs: { core: 核心, util: 工具, app: 业务, web: 网页, tests: 测试 }
 forbidden_words:
   - dirs: [app]
     match: word

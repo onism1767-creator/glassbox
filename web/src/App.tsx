@@ -1,23 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ReactFlow, ReactFlowProvider, Background, Controls, MiniMap, useReactFlow, useNodesInitialized, type Edge, type Node } from "@xyflow/react";
 import { fetchSnapshot, subscribe, type UpdateMessage } from "./api.ts";
-import { SnapshotIndex, buildGraph, type Level, type GNode, COLORS, basename, ago } from "./model.ts";
+import { SnapshotIndex, buildGraph, type Level, type GNode, type GEdge, COLORS, basename, ago } from "./model.ts";
 import { layoutGraph, type CanvasNode } from "./layout.ts";
 import { nodeTypes } from "./nodes.tsx";
-import { Panel } from "./Panel.tsx";
+import { Panel, type Selection } from "./Panel.tsx";
+import { Tasks } from "./Tasks.tsx";
+import { WORDS, sourceShort, dirShort } from "./words.ts";
 import type { ActivityEvent } from "../../src/types.ts";
 
 function levelKey(level: Level): string {
   return level.kind === "dirs" ? "dirs" : level.kind === "files" ? `files:${level.dir}` : `symbols:${level.file}`;
 }
 
-function Breadcrumb({ level, onNavigate }: { level: Level; onNavigate: (l: Level) => void }) {
-  const parts: { label: string; level: Level }[] = [{ label: "目录", level: { kind: "dirs" } }];
-  if (level.kind === "files") parts.push({ label: level.dir === "." ? "根目录" : level.dir, level });
+function Breadcrumb({ ix, level, onNavigate }: { ix: SnapshotIndex; level: Level; onNavigate: (l: Level) => void }) {
+  const parts: { label: string; level: Level }[] = [{ label: "整个项目（目录级）", level: { kind: "dirs" } }];
+  if (level.kind === "files") parts.push({ label: `${dirShort(level.dir, ix.names)} 里的文件`, level });
   if (level.kind === "symbols") {
     const dir = level.file.includes("/") ? level.file.slice(0, level.file.indexOf("/")) : ".";
-    parts.push({ label: dir === "." ? "根目录" : dir, level: { kind: "files", dir } });
-    parts.push({ label: basename(level.file), level });
+    parts.push({ label: `${dirShort(dir, ix.names)} 里的文件`, level: { kind: "files", dir } });
+    parts.push({ label: `${basename(level.file)} 里的函数`, level });
   }
   return (
     <nav className="crumbs">
@@ -36,35 +38,32 @@ function Breadcrumb({ level, onNavigate }: { level: Level; onNavigate: (l: Level
 function Legend() {
   return (
     <div className="legend">
-      <div><i style={{ color: COLORS.violation }} /> 违规边</div>
-      <div><i style={{ color: COLORS.allowed }} /> 白名单放行</div>
-      <div><i style={{ color: COLORS.edge }} /> 普通 import</div>
-      <div><i style={{ color: COLORS.change["A"] }} /> 自基线新增</div>
-      <div><i style={{ color: COLORS.change["M"] }} /> 自基线修改</div>
-      <div><i style={{ color: COLORS.call["import"] }} /> 调用：按 import</div>
-      <div><i style={{ color: COLORS.call["same-file"] }} /> 调用：同文件</div>
-      <div><i style={{ color: COLORS.call["self"] }} /> 调用：self 同类</div>
-      <div><i style={{ color: COLORS.call["pyright"], borderStyle: "dashed" }} /> 调用：pyright 推断</div>
+      <div><i style={{ color: COLORS.violation }} /> 越层调用的线（分层违规）</div>
+      <div><i style={{ color: COLORS.allowed }} /> 明文允许的例外（白名单放行）</div>
+      <div><i style={{ color: COLORS.edge }} /> 普通的 import 线</div>
+      <div><i style={{ color: COLORS.change["A"] }} /> 这次会话新增的文件（相对基线）</div>
+      <div><i style={{ color: COLORS.change["M"] }} /> 这次会话修改的文件（相对基线）</div>
+      <div><i style={{ color: COLORS.call["import"] }} /> 调用线：顺着 import 找到（import）</div>
+      <div><i style={{ color: COLORS.call["same-file"] }} /> 调用线：同一个文件里（same-file）</div>
+      <div><i style={{ color: COLORS.call["self"] }} /> 调用线：自己类里的方法（self）</div>
+      <div><i style={{ color: COLORS.call["pyright"], borderStyle: "dashed" }} /> 调用线：类型分析器推断（pyright）</div>
+      <div className="legend-note">线越粗，import 或调用的次数越多；箭头从"用的人"指向"被用的人"。点一条线能看到对应的代码行。</div>
     </div>
   );
-}
-
-function sourceText(e: ActivityEvent): string {
-  return e.source === "hook" ? "Claude" : e.source === "watcher" ? "监听" : e.source === "git" ? "git" : "系统";
 }
 
 function Activity({ events, onClose }: { events: ActivityEvent[]; onClose: () => void }) {
   return (
     <div className="activity">
       <div className="activity-head">
-        <span>活动流（最近 {events.length} 条）</span>
+        <span>刚发生了什么（活动流，最近 {events.length} 条）</span>
         <button className="link" onClick={onClose}>收起</button>
       </div>
       <div className="activity-list">
         {events.length ? events.map((e) => (
           <div key={e.id} className={`activity-row ${e.source}`}>
             <span className="t">{e.at.slice(11, 19)}</span>
-            <span className="src">{sourceText(e)}</span>
+            <span className="src">{sourceShort(e.source)}</span>
             {e.session ? <span className="sess">{e.session}</span> : null}
             <span className="txt">{e.text}</span>
           </div>
@@ -84,7 +83,11 @@ function Canvas({ ix, live, events, onToggleActivity, showActivity }: { ix: Snap
   const [level, setLevel] = useState<Level>({ kind: "dirs" });
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
+  const [gEdges, setGEdges] = useState<Map<string, GEdge>>(new Map());
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [showTasks, setShowTasks] = useState<boolean>(() => !!ix.s.tasks);
   const [query, setQuery] = useState("");
   const [mountId, setMountId] = useState(0);
   const [tick, setTick] = useState(0);
@@ -113,8 +116,10 @@ function Canvas({ ix, live, events, onToggleActivity, showActivity }: { ix: Snap
       const selectedStillThere = want && n.some((x) => x.id === want);
       setNodes(selectedStillThere ? n.map((x) => (x.id === want ? { ...x, selected: true } : x)) : n);
       setEdges(e);
+      setGEdges(new Map(graph.edges.map((ge) => [ge.id, ge])));
       setSelectedId(selectedStillThere ? want : null);
       if (levelChanged) {
+        setSelectedEdgeId(null);
         lastLevel.current = key;
         focusAfterLayout.current = selectedStillThere ? want : null;
         setMountId((v) => v + 1);
@@ -139,10 +144,30 @@ function Canvas({ ix, live, events, onToggleActivity, showActivity }: { ix: Snap
     setLevel(l);
   }, []);
 
-  const selected = useMemo((): GNode | null => {
+  const selection = useMemo((): Selection | null => {
+    if (selectedTaskId) return { kind: "task", id: selectedTaskId };
+    if (selectedEdgeId) {
+      const ge = gEdges.get(selectedEdgeId);
+      if (ge) return { kind: "edge", e: ge };
+    }
     const n = nodes.find((x) => x.id === selectedId);
-    return n && n.type !== "lane" ? (n as Node<{ g: GNode }>).data.g : null;
-  }, [nodes, selectedId]);
+    return n && n.type !== "lane" ? { kind: "node", g: (n as Node<{ g: GNode }>).data.g } : null;
+  }, [nodes, selectedId, selectedEdgeId, selectedTaskId, gEdges]);
+
+  /** 选中任务时，它提到的文件在画布上高亮。 */
+  const hitFiles = useMemo(() => {
+    const t = selectedTaskId ? ix.s.tasks?.items.find((x) => x.id === selectedTaskId) : undefined;
+    return new Set(t?.files ?? []);
+  }, [ix, selectedTaskId]);
+  const nodesWithHit = useMemo(() => {
+    if (!hitFiles.size) return nodes;
+    return nodes.map((n) => {
+      if (n.type === "lane") return n;
+      const g = (n as Node<{ g: GNode }>).data.g;
+      const hit = g.files.some((f) => hitFiles.has(f));
+      return hit ? ({ ...n, data: { ...n.data, hit: true } } as CanvasNode) : n;
+    });
+  }, [nodes, hitFiles]);
 
   const onSearch = (): void => {
     const q = query.trim();
@@ -157,24 +182,26 @@ function Canvas({ ix, live, events, onToggleActivity, showActivity }: { ix: Snap
     if (sym) navigate({ kind: "symbols", file: sym.path }, `sym:${sym.id}`);
   };
 
-  const stageText = ix.s.history.latestStage ? `代码到达 ${ix.s.history.latestStage}` : "";
   const baseline = ix.s.baseline;
   void tick;
-  const updatedText = live.last ? `更新于 ${ago(live.last.at)}（${(live.last.elapsedMs / 1000).toFixed(1)} 秒）` : `快照 ${ago(ix.s.generatedAt)}`;
+  const updatedText = live.last ? `${ago(live.last.at)}更新，这次算了 ${(live.last.elapsedMs / 1000).toFixed(1)} 秒` : `图是 ${ago(ix.s.generatedAt)}算的`;
   return (
     <div className="app">
       <header className="topbar">
         <div className="brand">glassbox</div>
-        <Breadcrumb level={level} onNavigate={(l) => navigate(l)} />
+        <Breadcrumb ix={ix} level={level} onNavigate={(l) => navigate(l)} />
         <div className="meta">
-          <span className={`live ${live.connected ? "on" : "off"}`} title={live.connected ? "已连接实时推送" : "未连接实时推送"}>
-            {live.connected ? "● 实时" : "○ 离线"} · {live.refreshing ? "刷新中…" : updatedText}
+          <span className={`live ${live.connected ? "on" : "off"}`}>
+            {live.connected ? WORDS.liveOn : WORDS.liveOff} · {live.refreshing ? "正在重算…" : updatedText}
           </span>
-          <span>{ix.s.source.commit?.slice(0, 9) ?? "无 git"}{ix.s.source.branch ? ` · ${ix.s.source.branch}` : ""}{ix.s.source.dirty ? " · 工作区有改动" : ""}</span>
-          {stageText ? <span>{stageText}</span> : null}
-          {baseline ? <span>基线后 {baseline.commitsSince} 提交 · {baseline.changes.length} 文件变更</span> : <span>无基线</span>}
-          <span className={ix.s.violations.length ? "red" : "green"}>违规 {ix.s.violations.length}</span>
-          <button className="crumb" onClick={onToggleActivity}>活动 {events.length}</button>
+          <span title="当前代码版本（git 提交）与分支">
+            {ix.s.source.commit ? `代码版本 ${ix.s.source.commit.slice(0, 9)}（git 提交）` : "没有 git"}{ix.s.source.branch ? ` · 分支 ${ix.s.source.branch}` : ""}{ix.s.source.dirty ? " · 有还没提交的改动" : ""}
+          </span>
+          {ix.s.history.latestStage ? <span>{WORDS.stage(ix.s.history.latestStage)}</span> : null}
+          <span>{baseline ? WORDS.baseline(baseline.commitsSince, baseline.changes.length) : WORDS.noBaseline}</span>
+          <span className={ix.s.violations.length ? "red" : "green"}>{WORDS.violations(ix.s.violations.length)}</span>
+          <button className="crumb" onClick={() => setShowTasks((v) => !v)}>{showTasks ? "收起任务栏" : `任务与进度${ix.s.tasks ? `（${ix.s.tasks.items.length}）` : ""}`}</button>
+          <button className="crumb" onClick={onToggleActivity}>刚发生了什么 {events.length}（活动流）</button>
         </div>
         <form
           className="search"
@@ -183,16 +210,17 @@ function Canvas({ ix, live, events, onToggleActivity, showActivity }: { ix: Snap
             onSearch();
           }}
         >
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="文件名或函数名，回车跳转" />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="输文件名或函数名，回车跳过去" />
         </form>
       </header>
       <div className="body">
+        {showTasks ? <Tasks ix={ix} selectedTaskId={selectedTaskId} onSelect={(id) => { setSelectedTaskId(id); if (id) { setSelectedId(null); setSelectedEdgeId(null); } }} onClose={() => setShowTasks(false)} /> : null}
         <div className="canvas">
           <ReactFlow
             key={mountId}
             fitView
             fitViewOptions={{ padding: 0.12 }}
-            nodes={nodes}
+            nodes={nodesWithHit}
             edges={edges}
             nodeTypes={nodeTypes}
             minZoom={0.1}
@@ -200,14 +228,25 @@ function Canvas({ ix, live, events, onToggleActivity, showActivity }: { ix: Snap
             nodesConnectable={false}
             elementsSelectable
             onNodeClick={(_, n) => {
+              setSelectedEdgeId(null);
+              setSelectedTaskId(null);
               setSelectedId(n.id);
+            }}
+            onEdgeClick={(_, e) => {
+              setSelectedId(null);
+              setSelectedTaskId(null);
+              setSelectedEdgeId(e.id);
             }}
             onNodeDoubleClick={(_, n) => {
               const g = (n as Node<{ g?: GNode }>).data.g;
               if (g?.drill) navigate(g.drill);
               else if (g?.ref.kind === "portal") navigate(g.ref.target);
             }}
-            onPaneClick={() => setSelectedId(null)}
+            onPaneClick={() => {
+              setSelectedId(null);
+              setSelectedEdgeId(null);
+              setSelectedTaskId(null);
+            }}
             proOptions={{ hideAttribution: true }}
           >
             <Background gap={24} color="#e3e6ea" />
@@ -217,7 +256,7 @@ function Canvas({ ix, live, events, onToggleActivity, showActivity }: { ix: Snap
           <Legend />
           {showActivity ? <Activity events={events} onClose={onToggleActivity} /> : null}
         </div>
-        <Panel ix={ix} selected={selected} onNavigate={navigate} />
+        <Panel ix={ix} selection={selection} onNavigate={navigate} />
       </div>
     </div>
   );
@@ -263,7 +302,7 @@ export function App() {
   }, [ix, liveEvents]);
 
   if (error) return <div className="center red">{error}</div>;
-  if (!ix) return <div className="center muted">读取快照…</div>;
+  if (!ix) return <div className="center muted">正在读取这个项目的图…</div>;
   return (
     <ReactFlowProvider>
       <Canvas ix={ix} live={live} events={events} showActivity={showActivity} onToggleActivity={() => setShowActivity((v) => !v)} />

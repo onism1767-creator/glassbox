@@ -6,6 +6,9 @@ import { readBaseline, diffSinceBaseline, currentHead, type DiffResult } from ".
 import { topDir } from "./rules.ts";
 import { git } from "./files.ts";
 import { writeFacts } from "./store.ts";
+import { computeTech, type TechStack } from "./tech.ts";
+import { parseEmojiList, readStandardTasks, type TaskRecord } from "./tasks.ts";
+import { computeProgress, computeGauge, findInconsistencies, type TaskProgress, type StageGauge, type Inconsistency } from "./progress.ts";
 import type { FileRecord, ImportRecord, FileEdge, LayerRules, Violation, AllowedEdge, CommitRecord, Tier, SymbolRecord, CallEdge, UnresolvedCall, ActivityEvent, Touch } from "./types.ts";
 
 export interface DirModule {
@@ -52,6 +55,18 @@ export interface Snapshot {
   };
   baseline?: DiffResult;
   activity?: { events: ActivityEvent[]; touched: Record<string, Touch> };
+  /** 人话名字，来自 overlay，T2 声明。 */
+  names: { layers: Record<string, string>; dirs: Record<string, string>; tier: Tier };
+  /** 用到的技术：声明的依赖对照实际 import。 */
+  tech: TechStack;
+  /** 任务：声明层（任务文件）+ 证据层（进度信号、阶段对照、不一致）。 */
+  tasks?: {
+    source: { file: string; format: "emoji-list" | "standard"; tier: Tier };
+    items: TaskRecord[];
+    progress: Record<string, TaskProgress>;
+    gauge: StageGauge;
+    inconsistencies: Inconsistency[];
+  };
   /** 这次快照相对上一次重新解析了哪些文件。 */
   changedFiles?: string[];
   elapsedMs?: number;
@@ -115,13 +130,44 @@ export interface AssembleInput {
   source: Snapshot["source"];
   baseline?: DiffResult;
   activity?: Snapshot["activity"];
+  /** .workbench/tasks 这类 standard 任务目录。 */
+  standardTasksDir?: string;
+}
+
+function buildTasks(input: AssembleInput): Snapshot["tasks"] | undefined {
+  const { result, commits, baseline, activity, standardTasksDir } = input;
+  let items: TaskRecord[] = [];
+  let source: NonNullable<Snapshot["tasks"]>["source"] | null = null;
+  if (result.taskSource) {
+    items = result.taskSource.format === "standard" ? [] : parseEmojiList(result.taskSource.file, result.taskSource.text);
+    source = { file: result.taskSource.file, format: result.taskSource.format, tier: "T2" };
+  }
+  if (standardTasksDir) {
+    const std = readStandardTasks(standardTasksDir);
+    if (std.length) {
+      items = [...items, ...std];
+      source ??= { file: ".workbench/tasks", format: "standard", tier: "T2" };
+    }
+  }
+  if (!source) return undefined;
+  const progress: Record<string, TaskProgress> = {};
+  const map = new Map<string, TaskProgress>();
+  for (const t of items) {
+    const p = computeProgress(t, commits, baseline?.changes ?? [], activity?.touched ?? {}, Date.now(), items.filter((k) => k.parent === t.id));
+    progress[t.id] = p;
+    map.set(t.id, p);
+  }
+  const gauge = computeGauge(items, commits);
+  return { source, items, progress, gauge, inconsistencies: findInconsistencies(items, map, gauge) };
 }
 
 /** 把索引结果、历史、基线、活动拼成快照；纯计算。 */
-export function assembleSnapshot({ root, result, commits, source, baseline, activity }: AssembleInput): Snapshot {
+export function assembleSnapshot(input: AssembleInput): Snapshot {
+  const { root, result, commits, source, baseline, activity } = input;
   const stages = stageTimeline(commits);
   const latest = stages[stages.length - 1];
   const layersTier: Tier = result.rules.provenance.find((p) => p.what === "layers")?.tier ?? "T2";
+  const tasks = buildTasks(input);
   return {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
@@ -153,6 +199,9 @@ export function assembleSnapshot({ root, result, commits, source, baseline, acti
     },
     ...(baseline ? { baseline } : {}),
     ...(activity ? { activity } : {}),
+    names: { layers: result.overlay.names?.layers ?? {}, dirs: result.overlay.names?.dirs ?? {}, tier: "T2" },
+    tech: computeTech(result.imports, result.manifests),
+    ...(tasks ? { tasks } : {}),
     changedFiles: result.changedFiles,
     elapsedMs: result.elapsedMs,
   };
@@ -173,7 +222,7 @@ export async function buildSnapshot(root: string, options: SnapshotOptions): Pro
         baseline = undefined;
       }
     }
-    return assembleSnapshot({ root, result, commits, source, ...(baseline ? { baseline } : {}) });
+    return assembleSnapshot({ root, result, commits, source, ...(baseline ? { baseline } : {}), standardTasksDir: path.join(options.stateDir, "tasks") });
   } finally {
     await indexer.close();
   }

@@ -1,5 +1,6 @@
 import type { Snapshot } from "../../src/snapshot.ts";
 import type { FileRecord, SymbolRecord, CallEdge, FileEdge, Violation, AllowedEdge, ChangeRecord, UnresolvedCall, Touch } from "../../src/types.ts";
+import { WORDS, dirLabel, dirShort, layerLabel, layerBadge, kindWord, changeWord, type Names, EMPTY_NAMES } from "./words.ts";
 
 /** 多久以前，人话。 */
 export function ago(at: string, now = Date.now()): string {
@@ -26,10 +27,18 @@ export interface GNode {
   change?: ChangeRecord["status"] | "clean";
   uncommitted?: boolean;
   badges: { text: string; tone: "red" | "amber" | "green" | "blue" | "gray" | "purple" }[];
-  /** 下钻目标。 */
   drill?: Level;
   ref: { kind: "dir"; dir: string } | { kind: "file"; path: string } | { kind: "symbol"; id: string } | { kind: "portal"; target: Level };
+  /** 这个节点代表的文件（给任务高亮用）。 */
+  files: string[];
 }
+
+export type EdgeRef =
+  | { kind: "dir-edge"; from: string; to: string }
+  | { kind: "file-edge"; from: string; to: string }
+  | { kind: "file-portal"; dir: string; otherDir: string; direction: "out" | "in" }
+  | { kind: "call-edge"; from: string; to: string }
+  | { kind: "call-portal"; file: string; otherFile: string; direction: "out" | "in" };
 
 export interface GEdge {
   id: string;
@@ -40,6 +49,7 @@ export interface GEdge {
   width: number;
   dashed?: boolean;
   label?: string;
+  ref: EdgeRef;
 }
 
 export interface Lane {
@@ -91,9 +101,11 @@ export class SnapshotIndex {
   readonly maxLayer: number;
   readonly topDirs: string[];
   readonly touched: Record<string, Touch>;
+  readonly names: Names;
 
   constructor(readonly s: Snapshot) {
     this.touched = s.activity?.touched ?? {};
+    this.names = s.names ? { layers: s.names.layers, dirs: s.names.dirs } : EMPTY_NAMES;
     for (const f of s.files) {
       this.files.set(f.path, f);
       const top = topDir(f.path);
@@ -158,11 +170,11 @@ export class SnapshotIndex {
   }
 
   laneLabel(partition: number): string {
-    if (partition === 0) return "上游（依赖分层包，不在分层内）";
-    if (partition === this.maxLayer + 2) return "资源与其他（无分层依赖）";
+    if (partition === 0) return "用到分层代码的测试和脚本（上游，不在分层内）";
+    if (partition === this.maxLayer + 2) return "文档、配置这类资源（没有分层依赖）";
     const layer = this.maxLayer - (partition - 1);
     const dirs = Object.entries(this.layers).filter(([, l]) => l === layer).map(([d]) => d);
-    return `L${layer} · ${dirs.join("、")}`;
+    return layerLabel(layer, dirs, this.names);
   }
 
   fileEdgeTone(e: FileEdge): { color: string; violations: number; allowed: number } {
@@ -175,9 +187,14 @@ export class SnapshotIndex {
     }
     return { color: violations ? COLORS.violation : allowed ? COLORS.allowed : COLORS.edge, violations, allowed };
   }
+
+  /** 构成一条目录级边的全部文件级边。 */
+  fileEdgesBetweenDirs(from: string, to: string): FileEdge[] {
+    return this.s.edges.filter((e) => topDir(e.from) === from && topDir(e.to) === to);
+  }
 }
 
-const SIZE = { dir: { width: 210, height: 78 }, file: { width: 230, height: 60 }, symbol: { width: 240, height: 52 }, portal: { width: 190, height: 46 } };
+const SIZE = { dir: { width: 230, height: 84 }, file: { width: 240, height: 64 }, symbol: { width: 250, height: 54 }, portal: { width: 200, height: 48 } };
 
 function edgeWidth(count: number): number {
   return Math.min(6, 1 + Math.log2(1 + count));
@@ -199,15 +216,15 @@ function dirGraph(ix: SnapshotIndex): Graph {
     const { changed, uncommitted } = ix.changedCount(files);
     const violations = ix.s.violations.filter((v) => topDir(v.evidence.path) === dir).length;
     const badges: GNode["badges"] = [];
-    if (layer !== undefined) badges.push({ text: `L${layer}`, tone: "blue" });
-    if (violations) badges.push({ text: `违规 ${violations}`, tone: "red" });
-    if (changed) badges.push({ text: `改动 ${changed}${uncommitted ? `（${uncommitted} 未提交）` : ""}`, tone: "amber" });
+    if (layer !== undefined) badges.push({ text: layerBadge(layer, ix.names), tone: "blue" });
+    if (violations) badges.push({ text: WORDS.violations(violations), tone: "red" });
+    if (changed) badges.push({ text: WORDS.changedFiles(changed, uncommitted), tone: "amber" });
     const touchedHere = files.filter((f) => ix.touched[f.path]).length;
-    if (touchedHere) badges.push({ text: `刚改 ${touchedHere}`, tone: "purple" });
+    if (touchedHere) badges.push({ text: WORDS.touched(touchedHere), tone: "purple" });
     nodes.push({
       id: `dir:${dir}`,
       type: "dir",
-      label: dir === "." ? "根目录" : dir,
+      label: dirLabel(dir, ix.names),
       sub: `${files.length} 个文件`,
       partition,
       ...SIZE.dir,
@@ -216,6 +233,7 @@ function dirGraph(ix: SnapshotIndex): Graph {
       badges,
       drill: { kind: "files", dir },
       ref: { kind: "dir", dir },
+      files: files.map((f) => f.path),
     });
     if (!lanes.has(partition)) lanes.set(partition, { partition, label: ix.laneLabel(partition), tone: layer !== undefined ? `l${layer}` : partition === 0 ? "up" : "res" });
   }
@@ -226,7 +244,8 @@ function dirGraph(ix: SnapshotIndex): Graph {
     count: e.count,
     color: e.violations ? COLORS.violation : e.allowed ? COLORS.allowed : COLORS.edge,
     width: edgeWidth(e.count),
-    label: e.violations ? `${e.count} · 违规 ${e.violations}` : e.allowed ? `${e.count} · 白名单 ${e.allowed}` : String(e.count),
+    label: e.violations ? WORDS.importEdgeViolations(e.count, e.violations) : e.allowed ? WORDS.importEdgeAllowed(e.count, e.allowed) : WORDS.importEdge(e.count),
+    ref: { kind: "dir-edge", from: e.from, to: e.to },
   }));
   return { nodes, edges, lanes: [...lanes.values()].sort((a, b) => a.partition - b.partition) };
 }
@@ -240,16 +259,16 @@ function fileGraph(ix: SnapshotIndex, dir: string): Graph {
     const symbols = ix.symbolsByFile.get(f.path)?.length ?? 0;
     const violations = ix.violationsByFile.get(f.path)?.length ?? 0;
     const badges: GNode["badges"] = [];
-    if (violations) badges.push({ text: `违规 ${violations}`, tone: "red" });
-    if (change.status !== "clean") badges.push({ text: changeText(change.status, change.uncommitted), tone: change.status === "D" ? "red" : "amber" });
+    if (violations) badges.push({ text: WORDS.violations(violations), tone: "red" });
+    if (change.status !== "clean") badges.push({ text: changeWord(change.status, change.uncommitted), tone: change.status === "D" ? "red" : "amber" });
     const touch = ix.touched[f.path];
-    if (touch) badges.push({ text: `刚改 · ${ago(touch.at)}${touch.session ? ` · ${touch.session}` : ""}`, tone: "purple" });
-    if (symbols) badges.push({ text: `${symbols} 符号`, tone: "gray" });
+    if (touch) badges.push({ text: `Claude 刚改过 · ${ago(touch.at)}${touch.session ? ` · 会话 ${touch.session}` : ""}`, tone: "purple" });
+    if (symbols) badges.push({ text: WORDS.symbols(symbols), tone: "gray" });
     nodes.push({
       id: `file:${f.path}`,
       type: "file",
       label: basename(f.path),
-      sub: f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : f.language,
+      sub: f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) + "/" : f.language,
       partition: 1,
       ...SIZE.file,
       change: change.status,
@@ -257,6 +276,7 @@ function fileGraph(ix: SnapshotIndex, dir: string): Graph {
       badges,
       ...(symbols ? { drill: { kind: "symbols", file: f.path } } : {}),
       ref: { kind: "file", path: f.path },
+      files: [f.path],
     });
   }
   const edges = new Map<string, GEdge>();
@@ -268,7 +288,8 @@ function fileGraph(ix: SnapshotIndex, dir: string): Graph {
     if (!a && !b) continue;
     const tone = ix.fileEdgeTone(e);
     if (a && b) {
-      edges.set(`fe:${e.from}>${e.to}`, { id: `fe:${e.from}>${e.to}`, source: `file:${e.from}`, target: `file:${e.to}`, count: e.evidence.length, color: tone.color, width: edgeWidth(e.evidence.length), ...(tone.violations ? { label: `违规 ${tone.violations}` } : tone.allowed ? { label: "白名单" } : {}) });
+      const id = `fe:${e.from}>${e.to}`;
+      edges.set(id, { id, source: `file:${e.from}`, target: `file:${e.to}`, count: e.evidence.length, color: tone.color, width: edgeWidth(e.evidence.length), ...(tone.violations ? { label: `越层 ${tone.violations}` } : tone.allowed ? { label: "白名单放行" } : {}), ref: { kind: "file-edge", from: e.from, to: e.to } });
     } else if (a) {
       const other = topDir(e.to);
       const p = portalOut.get(other) ?? { count: 0, violations: 0, allowed: 0 };
@@ -278,28 +299,30 @@ function fileGraph(ix: SnapshotIndex, dir: string): Graph {
       portalOut.set(other, p);
       const id = `fe:${e.from}>portal:${other}`;
       const prev = edges.get(id);
-      edges.set(id, { id, source: `file:${e.from}`, target: `portal:out:${other}`, count: (prev?.count ?? 0) + e.evidence.length, color: tone.violations ? COLORS.violation : tone.allowed ? COLORS.allowed : prev?.color ?? COLORS.edge, width: edgeWidth((prev?.count ?? 0) + e.evidence.length) });
+      const count = (prev?.count ?? 0) + e.evidence.length;
+      edges.set(id, { id, source: `file:${e.from}`, target: `portal:out:${other}`, count, color: tone.violations ? COLORS.violation : tone.allowed ? COLORS.allowed : prev?.color ?? COLORS.edge, width: edgeWidth(count), ref: { kind: "file-portal", dir, otherDir: other, direction: "out" } });
     } else {
       const other = topDir(e.from);
       portalIn.set(other, (portalIn.get(other) ?? 0) + e.evidence.length);
       const id = `fe:portal:${other}>${e.to}`;
       const prev = edges.get(id);
-      edges.set(id, { id, source: `portal:in:${other}`, target: `file:${e.to}`, count: (prev?.count ?? 0) + e.evidence.length, color: prev?.color ?? COLORS.edge, width: edgeWidth((prev?.count ?? 0) + e.evidence.length) });
+      const count = (prev?.count ?? 0) + e.evidence.length;
+      edges.set(id, { id, source: `portal:in:${other}`, target: `file:${e.to}`, count, color: prev?.color ?? COLORS.edge, width: edgeWidth(count), ref: { kind: "file-portal", dir, otherDir: other, direction: "in" } });
     }
   }
   for (const [other, count] of portalIn) {
-    nodes.push({ id: `portal:in:${other}`, type: "portal", label: other === "." ? "根目录" : other, sub: `${count} 处 import 进来`, partition: 0, ...SIZE.portal, badges: [], ref: { kind: "portal", target: { kind: "files", dir: other } } });
+    nodes.push({ id: `portal:in:${other}`, type: "portal", label: dirLabel(other, ix.names), sub: `${count} 处 import 进来`, partition: 0, ...SIZE.portal, badges: [], ref: { kind: "portal", target: { kind: "files", dir: other } }, files: [] });
   }
   for (const [other, p] of portalOut) {
     const badges: GNode["badges"] = [];
-    if (p.violations) badges.push({ text: `违规 ${p.violations}`, tone: "red" });
-    if (p.allowed) badges.push({ text: `白名单 ${p.allowed}`, tone: "amber" });
-    nodes.push({ id: `portal:out:${other}`, type: "portal", label: other === "." ? "根目录" : other, sub: `${p.count} 处 import 出去`, partition: 2, ...SIZE.portal, badges, ref: { kind: "portal", target: { kind: "files", dir: other } } });
+    if (p.violations) badges.push({ text: `越层 ${p.violations}`, tone: "red" });
+    if (p.allowed) badges.push({ text: `白名单放行 ${p.allowed}`, tone: "amber" });
+    nodes.push({ id: `portal:out:${other}`, type: "portal", label: dirLabel(other, ix.names), sub: `${p.count} 处 import 出去`, partition: 2, ...SIZE.portal, badges, ref: { kind: "portal", target: { kind: "files", dir: other } }, files: [] });
   }
   const lanes: Lane[] = [];
-  if (portalIn.size) lanes.push({ partition: 0, label: "谁依赖这个目录", tone: "up" });
-  lanes.push({ partition: 1, label: dir === "." ? "根目录" : `${dir}/`, tone: ix.layers[dir] !== undefined ? `l${ix.layers[dir]}` : "res" });
-  if (portalOut.size) lanes.push({ partition: 2, label: "这个目录依赖谁", tone: "res" });
+  if (portalIn.size) lanes.push({ partition: 0, label: "谁用了这个目录（被 import）", tone: "up" });
+  lanes.push({ partition: 1, label: `${dirShort(dir, ix.names)}（${dir === "." ? "根目录" : dir + "/"}）`, tone: ix.layers[dir] !== undefined ? `l${ix.layers[dir]}` : "res" });
+  if (portalOut.size) lanes.push({ partition: 2, label: "这个目录用了谁（import 出去）", tone: "res" });
   return { nodes, edges: [...edges.values()], lanes };
 }
 
@@ -311,16 +334,16 @@ function symbolGraph(ix: SnapshotIndex, file: string): Graph {
   const hasModuleCalls = (ix.callsFrom.get(moduleId)?.length ?? 0) > 0;
   if (hasModuleCalls) {
     ids.add(moduleId);
-    nodes.push({ id: `sym:${moduleId}`, type: "symbol", label: "<module> 顶层代码", sub: basename(file), partition: 1, ...SIZE.symbol, badges: [{ text: "模块", tone: "gray" }], ref: { kind: "symbol", id: moduleId } });
+    nodes.push({ id: `sym:${moduleId}`, type: "symbol", label: "文件顶层的代码（<module>）", sub: basename(file), partition: 1, ...SIZE.symbol, badges: [{ text: "不在任何函数里", tone: "gray" }], ref: { kind: "symbol", id: moduleId }, files: [file] });
   }
   for (const s of symbols) {
     const callers = ix.callsTo.get(s.id)?.length ?? 0;
     const callees = ix.callsFrom.get(s.id)?.length ?? 0;
     const unresolved = ix.unresolvedFrom.get(s.id)?.filter((u) => u.kind === "needs-types" || u.kind === "inherited" || u.kind === "unknown-name").length ?? 0;
-    const badges: GNode["badges"] = [{ text: kindText(s.kind), tone: s.kind === "class" ? "purple" : "gray" }];
-    if (callers) badges.push({ text: `被调 ${callers}`, tone: "blue" });
-    if (unresolved) badges.push({ text: `未解析 ${unresolved}`, tone: "amber" });
-    nodes.push({ id: `sym:${s.id}`, type: "symbol", label: s.qualified, sub: `${s.startLine}–${s.endLine} 行${callees ? ` · 调用 ${callees}` : ""}`, partition: 1, ...SIZE.symbol, badges, ref: { kind: "symbol", id: s.id } });
+    const badges: GNode["badges"] = [{ text: kindWord(s.kind), tone: s.kind === "class" ? "purple" : "gray" }];
+    if (callers) badges.push({ text: WORDS.callers(callers), tone: "blue" });
+    if (unresolved) badges.push({ text: WORDS.unresolved(unresolved), tone: "amber" });
+    nodes.push({ id: `sym:${s.id}`, type: "symbol", label: s.qualified, sub: `第 ${s.startLine}–${s.endLine} 行${callees ? ` · 调用了别人 ${callees} 次` : ""}`, partition: 1, ...SIZE.symbol, badges, ref: { kind: "symbol", id: s.id }, files: [file] });
   }
   const edges = new Map<string, GEdge>();
   const portalIn = new Map<string, number>();
@@ -330,7 +353,7 @@ function symbolGraph(ix: SnapshotIndex, file: string): Graph {
     if (prev) {
       prev.count++;
       prev.width = edgeWidth(prev.count);
-      prev.label = String(prev.count);
+      prev.label = `${prev.count} 次`;
     } else edges.set(id, make());
   };
   for (const c of ix.s.calls.edges) {
@@ -339,31 +362,24 @@ function symbolGraph(ix: SnapshotIndex, file: string): Graph {
     if (!a && !b) continue;
     const color = COLORS.call[c.resolution] ?? COLORS.edge;
     const dashed = c.resolution === "pyright";
-    if (a && b) bump(`ce:${c.from}>${c.to}`, () => ({ id: `ce:${c.from}>${c.to}`, source: `sym:${c.from}`, target: `sym:${c.to}`, count: 1, color, width: 1.5, dashed }));
+    if (a && b) bump(`ce:${c.from}>${c.to}`, () => ({ id: `ce:${c.from}>${c.to}`, source: `sym:${c.from}`, target: `sym:${c.to}`, count: 1, color, width: 1.5, dashed, ref: { kind: "call-edge", from: c.from, to: c.to } }));
     else if (a) {
       const other = c.to.split("::")[0] ?? "";
       portalOut.set(other, (portalOut.get(other) ?? 0) + 1);
-      bump(`ce:${c.from}>portal:${other}`, () => ({ id: `ce:${c.from}>portal:${other}`, source: `sym:${c.from}`, target: `portal:out:${other}`, count: 1, color, width: 1.5, dashed }));
+      bump(`ce:${c.from}>portal:${other}`, () => ({ id: `ce:${c.from}>portal:${other}`, source: `sym:${c.from}`, target: `portal:out:${other}`, count: 1, color, width: 1.5, dashed, ref: { kind: "call-portal", file, otherFile: other, direction: "out" } }));
     } else {
       const other = c.from.split("::")[0] ?? "";
       portalIn.set(other, (portalIn.get(other) ?? 0) + 1);
-      bump(`ce:portal:${other}>${c.to}`, () => ({ id: `ce:portal:${other}>${c.to}`, source: `portal:in:${other}`, target: `sym:${c.to}`, count: 1, color, width: 1.5, dashed }));
+      bump(`ce:portal:${other}>${c.to}`, () => ({ id: `ce:portal:${other}>${c.to}`, source: `portal:in:${other}`, target: `sym:${c.to}`, count: 1, color, width: 1.5, dashed, ref: { kind: "call-portal", file, otherFile: other, direction: "in" } }));
     }
   }
-  for (const [other, count] of portalIn) nodes.push({ id: `portal:in:${other}`, type: "portal", label: basename(other), sub: `${other} · ${count} 次调用进来`, partition: 0, ...SIZE.portal, badges: [], ref: { kind: "portal", target: { kind: "symbols", file: other } } });
-  for (const [other, count] of portalOut) nodes.push({ id: `portal:out:${other}`, type: "portal", label: basename(other), sub: `${other} · ${count} 次调用出去`, partition: 2, ...SIZE.portal, badges: [], ref: { kind: "portal", target: { kind: "symbols", file: other } } });
+  for (const [other, count] of portalIn) nodes.push({ id: `portal:in:${other}`, type: "portal", label: basename(other), sub: `${other} · 调用进来 ${count} 次`, partition: 0, ...SIZE.portal, badges: [], ref: { kind: "portal", target: { kind: "symbols", file: other } }, files: [other] });
+  for (const [other, count] of portalOut) nodes.push({ id: `portal:out:${other}`, type: "portal", label: basename(other), sub: `${other} · 调用出去 ${count} 次`, partition: 2, ...SIZE.portal, badges: [], ref: { kind: "portal", target: { kind: "symbols", file: other } }, files: [other] });
   const lanes: Lane[] = [];
-  if (portalIn.size) lanes.push({ partition: 0, label: "谁调用这个文件里的符号", tone: "up" });
-  lanes.push({ partition: 1, label: file, tone: "res" });
-  if (portalOut.size) lanes.push({ partition: 2, label: "这个文件调用了谁", tone: "res" });
+  if (portalIn.size) lanes.push({ partition: 0, label: "谁调用了这个文件里的函数（调用者）", tone: "up" });
+  lanes.push({ partition: 1, label: `${basename(file)} 里的函数和类（${file}）`, tone: "res" });
+  if (portalOut.size) lanes.push({ partition: 2, label: "这个文件调用了谁（被调用者）", tone: "res" });
   return { nodes, edges: [...edges.values()], lanes };
 }
 
-export function changeText(status: ChangeRecord["status"] | "clean", uncommitted: boolean): string {
-  const base = status === "A" ? "新增" : status === "M" ? "修改" : status === "D" ? "删除" : status === "R" ? "重命名" : status === "?" ? "未跟踪" : "未变";
-  return uncommitted && status !== "?" ? `${base}·未提交` : base;
-}
-
-export function kindText(kind: SymbolRecord["kind"]): string {
-  return kind === "class" ? "类" : kind === "method" ? "方法" : "函数";
-}
+export { kindWord as kindText, changeWord as changeText };

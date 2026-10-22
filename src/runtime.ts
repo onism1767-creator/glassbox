@@ -87,6 +87,8 @@ export class Runtime {
       if (inner === "HEAD" || inner === "ORIG_HEAD" || inner === "packed-refs" || inner.startsWith("refs/") || inner === "logs/HEAD") return "git";
       return "ignore";
     }
+    // 标准任务目录在 .workbench 里，索引器不读它，但它变了要重算任务。
+    if (rel.startsWith(".workbench/tasks/")) return "file";
     if (isExcluded(rel, this.excludes)) return "ignore";
     return "file";
   }
@@ -170,6 +172,7 @@ export class Runtime {
       source,
       ...(baseline ? { baseline } : {}),
       activity: { events: this.activity.recent(200), touched: this.activity.touched() },
+      standardTasksDir: path.join(this.options.stateDir, "tasks"),
     });
     writeSnapshotJson(this.options.stateDir, this.snapshot);
     const message: UpdateMessage = { at: this.snapshot.generatedAt, reason, changed, elapsedMs, violations: result.violations.length, files: result.files.length };
