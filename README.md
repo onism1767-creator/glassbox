@@ -18,12 +18,14 @@
 
 ## 状态
 
-阶段 2 完成：事实索引器可用。它读文件、解析 import、从项目自己的守卫测试读分层规则并检验违规、读 git 历史与阶段标签、算会话基线差异，写出 snapshot.json 与 facts.sqlite。画布、实时、任务与证据层还没有。
+阶段 3 完成：事实索引器到符号级。它读文件、解析 import、从项目自己的守卫测试读分层规则并检验违规、提取函数与类与方法、解析调用边（语法层 + pyright 精确层）、读 git 历史与阶段标签、算会话基线差异，写出 snapshot.json 与 facts.sqlite。画布、实时、任务与证据层还没有。
 
 ```bash
 npm install
 node src/cli.ts doctor
 node src/cli.ts check <仓库> --overlay <overlay.yaml>
+node src/cli.ts symbols <仓库>
+node src/cli.ts calls <函数或类名> <仓库>
 node src/cli.ts log <仓库>
 node src/cli.ts baseline set <仓库> --reason "会话开始"
 node src/cli.ts diff <仓库>
@@ -39,8 +41,9 @@ node src/cli.ts snapshot <仓库>
 5. [设计稿 v1.2](设计稿-v1.2.md)：宏观文档读取、每任务进度条与预计时间，每个数字标来源与真相等级
 6. [阶段 1 对照记录](docs/阶段1-对照/阶段1-对照记录.md)：原版 nativue-ai 在 GEO 工具上的 Windows 实测
 7. [阶段 2 记录](docs/阶段2-索引器/阶段2-记录.md)：事实索引器，与 GEO 守卫测试结论一致
+8. [阶段 3 记录](docs/阶段3-符号级/阶段3-记录.md)：符号级调用图，语法层加 pyright 精确层，GEO 手工核对
 
-技术决定：TypeScript on Node 24；tree-sitter 做语法结构；Sourcegraph SCIP 索引器做符号级调用图；node:sqlite 做事实库；React Flow 加 ELK 做画布；任务是仓库内 Markdown 文件；Claude Code hooks 做实时事件，协议本身与 AI 工具无关。
+技术决定：TypeScript on Node 24；tree-sitter 做语法结构；符号级调用图用 tree-sitter 语法层加 pyright 语言服务器精确层（原定的 scip-python 在 Windows 启动即崩，见阶段 3 记录）；node:sqlite 做事实库；React Flow 加 ELK 做画布；任务是仓库内 Markdown 文件；Claude Code hooks 做实时事件，协议本身与 AI 工具无关。
 
 ## 致谢
 

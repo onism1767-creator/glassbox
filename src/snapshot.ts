@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { indexRepository, type IndexOptions, type IndexResult } from "./index.ts";
+import { indexRepository, type IndexOptions, type IndexResult, type PreciseStats } from "./index.ts";
 import { readHistory, stageTimeline, hotspots, changeCoupling, type StageEntry, type Hotspot } from "./history.ts";
 import { readBaseline, diffSinceBaseline, currentHead, type DiffResult } from "./baseline.ts";
 import { topDir } from "./rules.ts";
 import { git } from "./files.ts";
 import { writeFacts } from "./store.ts";
-import type { FileRecord, ImportRecord, FileEdge, LayerRules, Violation, AllowedEdge, CommitRecord, Tier } from "./types.ts";
+import type { FileRecord, ImportRecord, FileEdge, LayerRules, Violation, AllowedEdge, CommitRecord, Tier, SymbolRecord, CallEdge, UnresolvedCall } from "./types.ts";
 
 export interface DirModule {
   id: string;
@@ -41,6 +41,8 @@ export interface Snapshot {
   ruleProblems: string[];
   violations: Violation[];
   allowed: AllowedEdge[];
+  symbols: SymbolRecord[];
+  calls: { edges: CallEdge[]; unresolved: UnresolvedCall[]; sites: number; precise: PreciseStats };
   history: {
     commits: CommitRecord[];
     stages: StageEntry[];
@@ -124,6 +126,7 @@ export async function buildSnapshot(root: string, options: SnapshotOptions): Pro
       files: "T0", imports: "T0", edges: "T0", "modules.dir": "T1", "modules.layer": layersTier,
       dirEdges: "T1", violations: "T1", allowed: "T1", "history.commits": "T0", "history.stages": "T0",
       "history.hotspots": "T1", "history.coupling": "T1", "baseline.changes": "T0",
+      symbols: "T0", "calls.edges": "T0", "calls.unresolved": "T0",
     },
     files: result.files,
     modules: dirModules(result),
@@ -134,6 +137,8 @@ export async function buildSnapshot(root: string, options: SnapshotOptions): Pro
     ruleProblems: result.ruleProblems,
     violations: result.violations,
     allowed: result.allowed,
+    symbols: result.symbols,
+    calls: { edges: result.calls.edges, unresolved: result.calls.unresolved, sites: result.calls.sites, precise: result.precise },
     history: {
       commits,
       stages,
@@ -160,6 +165,7 @@ export function summarizeSnapshot(s: Snapshot): string {
     `快照 ${s.generatedAt.slice(0, 19)}  ${s.source.commit?.slice(0, 9) ?? "无 git"}${s.source.branch ? " " + s.source.branch : ""}${s.source.dirty ? "（工作区有改动）" : ""}`,
     `文件 ${s.files.length}，目录模块 ${s.modules.length}，文件级边 ${s.edges.length}，顶层目录对 ${s.dirEdges.length}`,
     `分层 ${Object.keys(s.rules.layers).length} 个包；违规 ${s.violations.length}，白名单放行 ${s.allowed.length}`,
+    `符号 ${s.symbols.length}，调用点 ${s.calls.sites}，调用边 ${s.calls.edges.length}（pyright 升级 ${s.calls.precise.upgraded}），未解析 ${s.calls.unresolved.length}`,
     `提交 ${s.history.commits.length}，阶段 ${s.history.stages.length}${s.history.latestStage ? `，最新 ${s.history.latestStage}` : ""}`,
     s.baseline ? `基线 ${s.baseline.baseline.commit.slice(0, 9)} 之后：${s.baseline.commitsSince} 个提交，${s.baseline.changes.length} 个文件变更` : "基线：未记录",
   ];

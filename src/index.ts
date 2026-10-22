@@ -2,10 +2,24 @@ import { readOverlay, type Overlay } from "./config.ts";
 import { indexFiles } from "./files.ts";
 import { extractImports, buildFileEdges, detectPythonRoots, pythonTopLevelNames, readTsPaths } from "./imports.ts";
 import { buildRules, checkRules, topDir } from "./rules.ts";
-import type { FileRecord, ImportRecord, FileEdge, LayerRules, Violation, AllowedEdge } from "./types.ts";
+import { extractSymbols } from "./symbols.ts";
+import { extractCalls, type CallExtraction } from "./calls.ts";
+import { resolveWithPyright, pyrightServerEntry } from "./pyright.ts";
+import type { FileRecord, ImportRecord, FileEdge, LayerRules, Violation, AllowedEdge, SymbolRecord } from "./types.ts";
 
 export interface IndexOptions {
   overlayFile?: string;
+  /** 是否用 pyright 做精确层；缺省：装了就用。 */
+  precise?: boolean;
+}
+
+export interface PreciseStats {
+  used: boolean;
+  skipped: string | null;
+  attempted: number;
+  upgraded: number;
+  externalDefinitions: number;
+  elapsedMs: number;
 }
 
 export interface IndexResult {
@@ -21,6 +35,9 @@ export interface IndexResult {
   violations: Violation[];
   allowed: AllowedEdge[];
   layeredEdges: number;
+  symbols: SymbolRecord[];
+  calls: CallExtraction;
+  precise: PreciseStats;
 }
 
 export async function indexRepository(root: string, options: IndexOptions = {}): Promise<IndexResult> {
@@ -37,10 +54,76 @@ export async function indexRepository(root: string, options: IndexOptions = {}):
   const edges = buildFileEdges(imports);
   const { rules, problems: ruleProblems } = await buildRules({ overlay, contents });
   const check = checkRules(edges, files, contents, rules);
+  const symbols = await extractSymbols(files, contents);
+  const calls = await extractCalls(files, contents, imports, symbols);
+  const wantPrecise = options.precise ?? pyrightServerEntry() !== null;
+  let precise: PreciseStats = { used: false, skipped: wantPrecise ? null : "未启用", attempted: 0, upgraded: 0, externalDefinitions: 0, elapsedMs: 0 };
+  if (wantPrecise) {
+    const r = await resolveWithPyright(root, calls.unresolved, symbols, contents);
+    calls.edges.push(...r.edges);
+    calls.unresolved = r.stillUnresolved;
+    precise = { used: r.skipped === null, skipped: r.skipped, attempted: r.attempted, upgraded: r.edges.length, externalDefinitions: r.externalDefinitions, elapsedMs: r.elapsedMs };
+  }
   return {
     root, viaGit, overlay, files, imports, edges, pythonRoots, rules, ruleProblems,
     violations: check.violations, allowed: check.allowed, layeredEdges: check.layeredEdges,
+    symbols, calls, precise,
   };
+}
+
+/** 查某个符号的调用者与被调用者；query 可以是限定名、`路径::限定名`，或名字片段。 */
+export function callGraphFor(result: IndexResult, query: string): { matches: SymbolRecord[]; callers: Map<string, { edge: import("./types.ts").CallEdge }[]>; callees: Map<string, { edge: import("./types.ts").CallEdge }[]> } {
+  const matches = result.symbols.filter((s) => s.id === query || s.qualified === query || s.name === query || s.qualified.endsWith("." + query));
+  const callers = new Map<string, { edge: import("./types.ts").CallEdge }[]>();
+  const callees = new Map<string, { edge: import("./types.ts").CallEdge }[]>();
+  for (const m of matches) {
+    callers.set(m.id, result.calls.edges.filter((e) => e.to === m.id).map((edge) => ({ edge })));
+    callees.set(m.id, result.calls.edges.filter((e) => e.from === m.id).map((edge) => ({ edge })));
+  }
+  return { matches, callers, callees };
+}
+
+export function summarizeSymbols(result: IndexResult, file?: string): string {
+  const symbols = file ? result.symbols.filter((s) => s.path === file) : result.symbols;
+  const byKind = new Map<string, number>();
+  for (const s of symbols) byKind.set(s.kind, (byKind.get(s.kind) ?? 0) + 1);
+  const byRes = new Map<string, number>();
+  for (const e of result.calls.edges) byRes.set(e.resolution, (byRes.get(e.resolution) ?? 0) + 1);
+  const kinds = new Map<string, number>();
+  for (const u of result.calls.unresolved) kinds.set(u.kind, (kinds.get(u.kind) ?? 0) + 1);
+  const p = result.precise;
+  const lines = [
+    `符号 ${symbols.length}：${[...byKind].map(([k, v]) => `${k} ${v}`).join("、")}`,
+    `调用点 ${result.calls.sites}；解析到的调用边 ${result.calls.edges.length}：${[...byRes].map(([k, v]) => `${k} ${v}`).join("、")}`,
+    `未解析 ${result.calls.unresolved.length}：${[...kinds].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join("、")}`,
+    p.used
+      ? `精确层 pyright：尝试 ${p.attempted}，升级为调用边 ${p.upgraded}，定义在仓库外 ${p.externalDefinitions}，耗时 ${(p.elapsedMs / 1000).toFixed(1)} 秒`
+      : `精确层：未运行（${p.skipped ?? "未知原因"}）`,
+  ];
+  if (file) for (const s of symbols) lines.push(`  ${s.kind.padEnd(8)} ${s.qualified}  ${s.startLine}-${s.endLine}`);
+  return lines.join("\n") + "\n";
+}
+
+export function summarizeCalls(result: IndexResult, query: string): string {
+  const { matches, callers, callees } = callGraphFor(result, query);
+  if (!matches.length) return `没有找到符号：${query}\n`;
+  const lines: string[] = [];
+  const name = (id: string): string => id;
+  for (const m of matches) {
+    lines.push(`${m.kind} ${m.id}  ${m.startLine}-${m.endLine}`);
+    const ins = callers.get(m.id) ?? [];
+    lines.push(`  调用者 ${ins.length}：`);
+    for (const { edge } of ins) lines.push(`    ${name(edge.from)}  @${edge.evidence.path}:${edge.evidence.line}  [${edge.resolution}]`);
+    const outs = callees.get(m.id) ?? [];
+    lines.push(`  被调用 ${outs.length}：`);
+    for (const { edge } of outs) lines.push(`    ${name(edge.to)}  @${edge.evidence.path}:${edge.evidence.line}  [${edge.resolution}]`);
+    const un = result.calls.unresolved.filter((u) => u.from === m.id);
+    if (un.length) {
+      lines.push(`  未解析 ${un.length}：`);
+      for (const u of un) lines.push(`    ${u.callee}  @${u.path}:${u.line}  ${u.reason}`);
+    }
+  }
+  return lines.join("\n") + "\n";
 }
 
 export function summarize(result: IndexResult): string {

@@ -18,6 +18,14 @@ export interface FileRecord {
 
 export type ImportStatus = "resolved" | "external" | "unresolved";
 
+export interface ImportedName {
+  /** 目标里的原名；module 与 namespace 类型时为空字符串。 */
+  name: string;
+  /** 本文件里用的名字。 */
+  alias: string;
+  kind: "named" | "default" | "namespace" | "module";
+}
+
 export interface ImportRecord {
   from: string;
   spec: string;
@@ -27,6 +35,48 @@ export interface ImportRecord {
   status: ImportStatus;
   resolved?: string;
   reason?: string;
+  /** 这条语句把哪些名字带进了本文件。 */
+  names?: ImportedName[];
+}
+
+export type SymbolKind = "function" | "class" | "method";
+
+export interface SymbolRecord {
+  /** `路径::限定名`，全局唯一。 */
+  id: string;
+  path: string;
+  kind: SymbolKind;
+  name: string;
+  /** 文件内限定名，如 Tool.run、outer.inner。 */
+  qualified: string;
+  parent?: string;
+  startLine: number;
+  endLine: number;
+  exported?: boolean;
+  isDefault?: boolean;
+}
+
+export type CallResolution = "same-file" | "import" | "self" | "pyright";
+
+export interface CallEdge {
+  /** 调用者符号 id；模块顶层代码记为 `路径::<module>`。 */
+  from: string;
+  to: string;
+  evidence: Evidence;
+  resolution: CallResolution;
+}
+
+export type UnresolvedKind = "needs-types" | "builtin" | "external" | "unknown-name" | "complex" | "inherited";
+
+export interface UnresolvedCall {
+  path: string;
+  line: number;
+  /** 被调用名字最后一段的起始列（0 起），给精确层定位用。 */
+  col: number;
+  callee: string;
+  from: string;
+  kind: UnresolvedKind;
+  reason: string;
 }
 
 export interface FileEdge {

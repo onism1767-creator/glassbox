@@ -16,6 +16,8 @@ const help = `glassbox · 画布是代码的函数
   glassbox doctor                            检查运行环境
   glassbox index [仓库] [--json]              索引文件与 import 图，打印摘要
   glassbox check [仓库] [--overlay 文件]       按规则检验分层违规、零依赖包、禁用词；有违规则退出码 1
+  glassbox symbols [仓库] [--file 路径]        符号：函数、类、方法；调用边统计与未解析原因
+  glassbox calls <符号> [仓库]                 某符号的调用者与被调用者（限定名、路径::限定名或名字）
   glassbox log [仓库] [--max N]               git 历史：阶段标签序列、热点、变更耦合
   glassbox baseline set [仓库] [--reason 文字] [--commit sha]
   glassbox baseline show [仓库]
@@ -25,7 +27,13 @@ const help = `glassbox · 画布是代码的函数
 
   --overlay 文件   用指定的 overlay.yaml 代替仓库内 .workbench/overlay.yaml
   --state 目录     状态目录，默认 仓库/.workbench
+  --no-precise     不跑 pyright 精确层（只用语法层解析调用）
 `;
+
+const indexOptions = (): { overlayFile?: string; precise?: boolean } => ({
+  ...(option("overlay") ? { overlayFile: option("overlay") } : {}),
+  ...(flag("no-precise") ? { precise: false } : {}),
+});
 
 function resolveRoot(p?: string): string {
   const root = fs.realpathSync(path.resolve(p ?? process.cwd()));
@@ -59,15 +67,29 @@ async function main(): Promise<void> {
     }
     case "index": {
       const { indexRepository, summarize } = await import("./index.ts");
-      const result = await indexRepository(resolveRoot(positional[0]), { overlayFile: option("overlay") });
+      const result = await indexRepository(resolveRoot(positional[0]), indexOptions());
       process.stdout.write(flag("json") ? JSON.stringify(result, null, 1) : summarize(result));
       return;
     }
     case "check": {
       const { indexRepository, summarizeRules } = await import("./index.ts");
-      const result = await indexRepository(resolveRoot(positional[0]), { overlayFile: option("overlay") });
+      const result = await indexRepository(resolveRoot(positional[0]), indexOptions());
       process.stdout.write(summarizeRules(result));
       if (result.violations.length) process.exitCode = 1;
+      return;
+    }
+    case "symbols": {
+      const { indexRepository, summarizeSymbols } = await import("./index.ts");
+      const result = await indexRepository(resolveRoot(positional[0]), indexOptions());
+      process.stdout.write(summarizeSymbols(result, option("file")));
+      return;
+    }
+    case "calls": {
+      const query = positional[0];
+      if (!query) throw new Error("用法: glassbox calls <符号> [仓库]");
+      const { indexRepository, summarizeCalls } = await import("./index.ts");
+      const result = await indexRepository(resolveRoot(positional[1]), indexOptions());
+      process.stdout.write(summarizeCalls(result, query));
       return;
     }
     case "log": {

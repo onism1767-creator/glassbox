@@ -14,12 +14,18 @@ create table if not exists commits (sha text primary key, date text not null, au
 create table if not exists commit_files (sha text not null, path text not null, added integer not null, deleted integer not null);
 create table if not exists baseline (id integer primary key check (id = 1), commit_sha text not null, branch text, set_at text not null, reason text not null);
 create table if not exists changes (path text primary key, status text not null, committed integer not null);
+create table if not exists symbols (id text primary key, path text not null, kind text not null, name text not null, qualified text not null, parent text, start_line integer not null, end_line integer not null, exported integer, is_default integer);
+create table if not exists call_edges (src text not null, dst text not null, path text not null, line integer not null, note text, resolution text not null);
+create table if not exists unresolved_calls (path text not null, line integer not null, col integer not null, callee text not null, src text not null, kind text not null, reason text not null);
 create index if not exists idx_imports_src on imports (src);
 create index if not exists idx_edges_dst on edges (dst);
 create index if not exists idx_commit_files_path on commit_files (path);
+create index if not exists idx_symbols_path on symbols (path);
+create index if not exists idx_call_edges_src on call_edges (src);
+create index if not exists idx_call_edges_dst on call_edges (dst);
 `;
 
-const TABLES = ["meta", "files", "imports", "edges", "edge_evidence", "rule_provenance", "violations", "allowed_edges", "commits", "commit_files", "baseline", "changes"];
+const TABLES = ["meta", "files", "imports", "edges", "edge_evidence", "rule_provenance", "violations", "allowed_edges", "commits", "commit_files", "baseline", "changes", "symbols", "call_edges", "unresolved_calls"];
 
 /** 把一次快照整体写进 sqlite：先清空再写，简单且可重复。 */
 export function writeFacts(dbPath: string, snapshot: Snapshot): void {
@@ -65,6 +71,13 @@ export function writeFacts(dbPath: string, snapshot: Snapshot): void {
       commit.run(c.sha, c.date, c.author, c.subject, c.stage ?? null);
       for (const f of c.files) commitFile.run(c.sha, f.path, f.added, f.deleted);
     }
+
+    const symbol = db.prepare("insert into symbols values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    for (const s of snapshot.symbols) symbol.run(s.id, s.path, s.kind, s.name, s.qualified, s.parent ?? null, s.startLine, s.endLine, s.exported ? 1 : null, s.isDefault ? 1 : null);
+    const callEdge = db.prepare("insert into call_edges values (?, ?, ?, ?, ?, ?)");
+    for (const e of snapshot.calls.edges) callEdge.run(e.from, e.to, e.evidence.path, e.evidence.line ?? 0, e.evidence.note ?? null, e.resolution);
+    const unresolvedCall = db.prepare("insert into unresolved_calls values (?, ?, ?, ?, ?, ?, ?)");
+    for (const u of snapshot.calls.unresolved) unresolvedCall.run(u.path, u.line, u.col, u.callee, u.from, u.kind, u.reason);
 
     if (snapshot.baseline) {
       const b = snapshot.baseline.baseline;

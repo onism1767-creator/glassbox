@@ -1,6 +1,6 @@
 import path from "node:path";
 import { parse, grammarFor, unquote, type Node } from "./parser.ts";
-import type { FileRecord, ImportRecord, FileEdge } from "./types.ts";
+import type { FileRecord, ImportRecord, FileEdge, ImportedName } from "./types.ts";
 
 export interface ImportContext {
   /** 索引内全部文件的相对路径。 */
@@ -127,7 +127,10 @@ async function pythonImports(file: string, source: string, ctx: ImportContext): 
         const nameNode = child.type === "aliased_import" ? child.childForFieldName("name") : child;
         if (!nameNode || nameNode.type !== "dotted_name") continue;
         const spec = nameNode.text;
-        records.push({ from: file, spec, line: lineOf(node), level: 0, ...resolvePythonModule(spec, 0, file, ctx) });
+        const aliasNode = child.type === "aliased_import" ? child.childForFieldName("alias") : null;
+        const alias = aliasNode ? aliasNode.text : spec;
+        const names: ImportedName[] = [{ name: "", alias, kind: "module" }];
+        records.push({ from: file, spec, line: lineOf(node), level: 0, names, ...resolvePythonModule(spec, 0, file, ctx) });
       }
       continue;
     }
@@ -143,18 +146,23 @@ async function pythonImports(file: string, source: string, ctx: ImportContext): 
     } else {
       spec = moduleNode.text;
     }
-    const names = nodes(node.childrenForFieldName("name")).map((n) => (n.type === "aliased_import" ? n.childForFieldName("name")?.text ?? "" : n.text)).filter(Boolean);
+    const imported = nodes(node.childrenForFieldName("name")).map((n) => {
+      const name = n.type === "aliased_import" ? n.childForFieldName("name")?.text ?? "" : n.text;
+      const alias = n.type === "aliased_import" ? n.childForFieldName("alias")?.text ?? name : name;
+      return { name, alias };
+    }).filter((x) => x.name);
     const base = resolvePythonModule(spec, level, file, ctx);
-    let anyNameResolved = false;
-    for (const name of names) {
+    const remaining: ImportedName[] = [];
+    for (const { name, alias } of imported) {
       const sub = resolvePythonModule(spec ? `${spec}.${name}` : name, level, file, ctx);
       if (sub.status === "resolved" && sub.resolved !== base.resolved) {
-        anyNameResolved = true;
-        records.push({ from: file, spec: spec ? `${spec}.${name}` : `${".".repeat(level)}${name}`, line: lineOf(node), level, ...sub });
+        records.push({ from: file, spec: spec ? `${spec}.${name}` : `${".".repeat(level)}${name}`, line: lineOf(node), level, names: [{ name: "", alias, kind: "module" }], ...sub });
+      } else {
+        remaining.push({ name, alias, kind: "named" });
       }
     }
-    if (!anyNameResolved || base.status === "resolved") {
-      records.push({ from: file, spec: `${".".repeat(level)}${spec}`, line: lineOf(node), level, ...base });
+    if (remaining.length || base.status === "resolved" || !imported.length) {
+      records.push({ from: file, spec: `${".".repeat(level)}${spec}`, line: lineOf(node), level, names: remaining, ...base });
     }
   }
   return records;
@@ -164,13 +172,13 @@ async function jsImports(file: string, source: string, grammar: "javascript" | "
   const tree = await parse(grammar, source);
   if (!tree) return [];
   const records: ImportRecord[] = [];
-  const add = (spec: string, node: Node): void => {
-    records.push({ from: file, spec, line: lineOf(node), level: 0, ...resolveJsSpec(spec, file, ctx) });
+  const add = (spec: string, node: Node, names?: ImportedName[]): void => {
+    records.push({ from: file, spec, line: lineOf(node), level: 0, ...(names ? { names } : {}), ...resolveJsSpec(spec, file, ctx) });
   };
   for (const node of nodes(tree.rootNode.descendantsOfType(["import_statement", "export_statement", "call_expression"]))) {
     if (node.type === "import_statement" || node.type === "export_statement") {
       const sourceNode = node.childForFieldName("source");
-      if (sourceNode) add(unquote(sourceNode.text), node);
+      if (sourceNode) add(unquote(sourceNode.text), node, node.type === "import_statement" ? jsImportedNames(node) : undefined);
       continue;
     }
     const fn = node.childForFieldName("function");
@@ -182,6 +190,28 @@ async function jsImports(file: string, source: string, grammar: "javascript" | "
     if (first && (first.type === "string" || first.type === "template_string")) add(unquote(first.text), node);
   }
   return records;
+}
+
+/** `import d, { a, b as c } from "x"` / `import * as ns from "x"` 带进来的名字。 */
+function jsImportedNames(node: Node): ImportedName[] {
+  const names: ImportedName[] = [];
+  const clause = nodes(node.namedChildren).find((c) => c.type === "import_clause");
+  if (!clause) return names;
+  for (const child of nodes(clause.namedChildren)) {
+    if (child.type === "identifier") names.push({ name: "default", alias: child.text, kind: "default" });
+    else if (child.type === "namespace_import") {
+      const id = nodes(child.namedChildren).find((c) => c.type === "identifier");
+      if (id) names.push({ name: "", alias: id.text, kind: "namespace" });
+    } else if (child.type === "named_imports") {
+      for (const spec of nodes(child.namedChildren)) {
+        if (spec.type !== "import_specifier") continue;
+        const name = spec.childForFieldName("name")?.text ?? "";
+        const alias = spec.childForFieldName("alias")?.text ?? name;
+        if (name) names.push({ name, alias, kind: "named" });
+      }
+    }
+  }
+  return names;
 }
 
 export async function extractImports(files: FileRecord[], contents: Map<string, string>, ctx: ImportContext): Promise<ImportRecord[]> {
