@@ -1,6 +1,6 @@
-import { parse, grammarFor, type Node } from "./parser.ts";
+import { parse, type Node, type GrammarName } from "./parser.ts";
 import { enclosingSymbol, moduleSymbolId } from "./symbols.ts";
-import type { FileRecord, ImportRecord, SymbolRecord, CallEdge, UnresolvedCall, UnresolvedKind, CallResolution } from "./types.ts";
+import type { ImportRecord, SymbolRecord, CallEdge, UnresolvedCall, UnresolvedKind, CallResolution } from "./types.ts";
 
 function nodes(list: (Node | null)[]): Node[] {
   return list.filter((n): n is Node => n !== null);
@@ -12,6 +12,16 @@ export interface CallExtraction {
   sites: number;
 }
 
+/** 解析前的调用点：只有语法信息，可按文件缓存。 */
+export interface CallSite {
+  line: number;
+  /** 最后一段名字的起始列（0 起）。 */
+  col: number;
+  parts: string[] | null;
+  callee: string;
+  kind: "python" | "js";
+}
+
 const PYTHON_BUILTINS = new Set("abs all any ascii bin bool breakpoint bytearray bytes callable chr classmethod compile complex delattr dict dir divmod enumerate eval exec filter float format frozenset getattr globals hasattr hash help hex id input int isinstance issubclass iter len list locals map max memoryview min next object oct open ord pow print property range repr reversed round set setattr slice sorted staticmethod str sum super tuple type vars zip __import__ Exception ValueError TypeError KeyError IndexError RuntimeError NotImplementedError AttributeError StopIteration OSError IOError FileNotFoundError PermissionError TimeoutError ConnectionError AssertionError ImportError LookupError ZeroDivisionError OverflowError UnicodeDecodeError UnicodeEncodeError".split(" "));
 const JS_BUILTINS = new Set("Array Object String Number Boolean Symbol BigInt Map Set WeakMap WeakSet Promise Date RegExp Error TypeError RangeError SyntaxError JSON Math Reflect Proxy Intl parseInt parseFloat isNaN isFinite encodeURIComponent decodeURIComponent encodeURI decodeURI setTimeout setInterval clearTimeout clearInterval queueMicrotask structuredClone fetch console require Buffer URL URLSearchParams TextEncoder TextDecoder AbortController Headers Request Response".split(" "));
 
@@ -20,7 +30,6 @@ interface NameTable {
   methods: Map<string, Map<string, SymbolRecord>>;
   named: Map<string, { file: string; name: string }>;
   modules: Map<string, string>;
-  /** 来自外部包的名字（别名 → 模块名）。 */
   external: Map<string, string>;
 }
 
@@ -75,7 +84,6 @@ class Resolver {
     return t;
   }
 
-  /** 在目标文件找模块级名字；找不到就沿它的 import 再跳最多 3 次（包的 __init__ 再导出）。 */
   moduleLevel(file: string, name: string, depth = 0): SymbolRecord | undefined {
     const t = this.table(file);
     const direct = t.local.get(name);
@@ -139,7 +147,6 @@ class Resolver {
   }
 }
 
-/** 点分调用表达式拆成名字段，并给出最后一段的位置。 */
 function dottedParts(node: Node, grammar: "python" | "js"): { parts: string[]; last: Node } | null {
   if (node.type === "identifier" || node.type === "this") return { parts: [node.text], last: node };
   if (grammar === "python" && node.type === "attribute") {
@@ -159,41 +166,48 @@ function dottedParts(node: Node, grammar: "python" | "js"): { parts: string[]; l
   return null;
 }
 
-export async function extractCalls(files: FileRecord[], contents: Map<string, string>, imports: ImportRecord[], symbols: SymbolRecord[]): Promise<CallExtraction> {
+/** 单个文件的调用点，按语法提取。 */
+export async function extractCallSites(file: string, source: string, grammar: GrammarName): Promise<CallSite[]> {
+  const tree = await parse(grammar, source);
+  if (!tree) return [];
+  const kind = grammar === "python" ? "python" : "js";
+  const callTypes = kind === "python" ? ["call"] : ["call_expression", "new_expression"];
+  const sites: CallSite[] = [];
+  for (const call of nodes(tree.rootNode.descendantsOfType(callTypes))) {
+    const callee = call.childForFieldName(call.type === "new_expression" ? "constructor" : "function");
+    if (!callee) continue;
+    const dotted = dottedParts(callee, kind);
+    const calleeText = callee.text.length > 80 ? callee.text.slice(0, 77) + "…" : callee.text;
+    if (!dotted) sites.push({ line: call.startPosition.row + 1, col: callee.startPosition.column, parts: null, callee: calleeText, kind });
+    else sites.push({ line: dotted.last.startPosition.row + 1, col: dotted.last.startPosition.column, parts: dotted.parts, callee: calleeText, kind });
+  }
+  return sites;
+}
+
+/** 用符号表和 import 表把所有文件的调用点解析成边；纯计算。 */
+export function resolveCalls(sitesByFile: Map<string, CallSite[]>, symbols: SymbolRecord[], imports: ImportRecord[]): CallExtraction {
   const resolver = new Resolver(symbols, imports);
   const edges = new Map<string, CallEdge>();
   const unresolved: UnresolvedCall[] = [];
   let sites = 0;
-  for (const f of files) {
-    const grammar = grammarFor(f.language);
-    const source = contents.get(f.path);
-    if (!grammar || source === undefined) continue;
-    const tree = await parse(grammar, source);
-    if (!tree) continue;
-    const kind = grammar === "python" ? "python" : "js";
-    const builtins = kind === "python" ? PYTHON_BUILTINS : JS_BUILTINS;
-    const fileSymbols = resolver.fileSymbols(f.path);
-    const callTypes = kind === "python" ? ["call"] : ["call_expression", "new_expression"];
-    for (const call of nodes(tree.rootNode.descendantsOfType(callTypes))) {
-      const callee = call.childForFieldName(call.type === "new_expression" ? "constructor" : "function");
-      if (!callee) continue;
+  for (const [file, list] of sitesByFile) {
+    const fileSymbols = resolver.fileSymbols(file);
+    for (const site of list) {
       sites++;
-      const line = call.startPosition.row + 1;
-      const enclosing = enclosingSymbol(fileSymbols, line);
-      const from = enclosing?.id ?? moduleSymbolId(f.path);
-      const dotted = dottedParts(callee, kind);
-      const calleeText = callee.text.length > 80 ? callee.text.slice(0, 77) + "…" : callee.text;
-      if (!dotted) {
-        unresolved.push({ path: f.path, line, col: callee.startPosition.column, callee: calleeText, from, kind: "complex", reason: "复杂调用表达式" });
+      const enclosing = enclosingSymbol(fileSymbols, site.line);
+      const from = enclosing?.id ?? moduleSymbolId(file);
+      if (!site.parts) {
+        unresolved.push({ path: file, line: site.line, col: site.col, callee: site.callee, from, kind: "complex", reason: "复杂调用表达式" });
         continue;
       }
-      const result = resolver.resolveDotted(f.path, dotted.parts, enclosing, builtins);
+      const builtins = site.kind === "python" ? PYTHON_BUILTINS : JS_BUILTINS;
+      const result = resolver.resolveDotted(file, site.parts, enclosing, builtins);
       if ("symbol" in result) {
         if (result.symbol.id === from) continue;
-        const key = `${from}\u0000${result.symbol.id}\u0000${line}`;
-        if (!edges.has(key)) edges.set(key, { from, to: result.symbol.id, evidence: { path: f.path, line, note: calleeText }, resolution: result.resolution });
+        const key = `${from}\u0000${result.symbol.id}\u0000${site.line}`;
+        if (!edges.has(key)) edges.set(key, { from, to: result.symbol.id, evidence: { path: file, line: site.line, note: site.callee }, resolution: result.resolution });
       } else {
-        unresolved.push({ path: f.path, line: dotted.last.startPosition.row + 1, col: dotted.last.startPosition.column, callee: calleeText, from, kind: result.kind, reason: result.reason });
+        unresolved.push({ path: file, line: site.line, col: site.col, callee: site.callee, from, kind: result.kind, reason: result.reason });
       }
     }
   }

@@ -1,4 +1,4 @@
-import { parse, grammarFor, type Node } from "./parser.ts";
+import { parse, grammarFor, type Node, type GrammarName } from "./parser.ts";
 import type { FileRecord, SymbolRecord, SymbolKind } from "./types.ts";
 
 function nodes(list: (Node | null)[]): Node[] {
@@ -109,15 +109,20 @@ function jsSymbols(path: string, root: Node): SymbolRecord[] {
   return out;
 }
 
+/** 单个文件的符号。 */
+export async function extractFileSymbols(file: string, source: string, grammar: GrammarName): Promise<SymbolRecord[]> {
+  const tree = await parse(grammar, source);
+  if (!tree) return [];
+  return grammar === "python" ? pythonSymbols(file, tree.rootNode) : jsSymbols(file, tree.rootNode);
+}
+
 export async function extractSymbols(files: FileRecord[], contents: Map<string, string>): Promise<SymbolRecord[]> {
   const all: SymbolRecord[] = [];
   for (const f of files) {
     const grammar = grammarFor(f.language);
     const source = contents.get(f.path);
     if (!grammar || source === undefined) continue;
-    const tree = await parse(grammar, source);
-    if (!tree) continue;
-    all.push(...(grammar === "python" ? pythonSymbols(f.path, tree.rootNode) : jsSymbols(f.path, tree.rootNode)));
+    all.push(...(await extractFileSymbols(f.path, source, grammar)));
   }
   return all;
 }

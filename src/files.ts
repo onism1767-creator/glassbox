@@ -17,7 +17,7 @@ const EXCLUDED_DIRS = new Set([
 /** 永远排除的敏感文件。 */
 const SENSITIVE = /(^|\/)(?:\.env(?:\..*)?|\.npmrc|\.pypirc|\.netrc|id_(?:rsa|ed25519)|.*\.(?:pem|key|p12|pfx)|.*(?:credential|secret|token)s?\.json)$/i;
 
-const LANGUAGES: Record<string, string> = {
+export const LANGUAGES: Record<string, string> = {
   ".py": "python", ".pyi": "python",
   ".ts": "typescript", ".tsx": "tsx", ".mts": "typescript", ".cts": "typescript",
   ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
@@ -36,7 +36,7 @@ export async function git(root: string, args: string[]): Promise<string> {
   return stdout;
 }
 
-function globToRegExp(pattern: string): RegExp {
+export function globToRegExp(pattern: string): RegExp {
   const p = pattern.replace(/^\/+/, "").replace(/\/+$/, "");
   const escaped = p
     .split("**")

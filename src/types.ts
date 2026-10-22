@@ -135,3 +135,21 @@ export interface ChangeRecord {
   status: "A" | "M" | "D" | "R" | "?";
   committed: boolean;
 }
+
+export interface ActivityEvent {
+  id: number;
+  at: string;
+  source: "hook" | "watcher" | "git" | "system";
+  /** 如 SessionStart、PostToolUse、file-change、recompute、baseline。 */
+  kind: string;
+  session?: string;
+  tool?: string;
+  path?: string;
+  text: string;
+}
+
+export interface Touch {
+  at: string;
+  session?: string;
+  tool?: string;
+}

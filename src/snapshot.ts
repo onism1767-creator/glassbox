@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { indexRepository, type IndexOptions, type IndexResult, type PreciseStats } from "./index.ts";
+import { Indexer, type IndexOptions, type IndexResult, type PreciseStats } from "./indexer.ts";
 import { readHistory, stageTimeline, hotspots, changeCoupling, type StageEntry, type Hotspot } from "./history.ts";
 import { readBaseline, diffSinceBaseline, currentHead, type DiffResult } from "./baseline.ts";
 import { topDir } from "./rules.ts";
 import { git } from "./files.ts";
 import { writeFacts } from "./store.ts";
-import type { FileRecord, ImportRecord, FileEdge, LayerRules, Violation, AllowedEdge, CommitRecord, Tier, SymbolRecord, CallEdge, UnresolvedCall } from "./types.ts";
+import type { FileRecord, ImportRecord, FileEdge, LayerRules, Violation, AllowedEdge, CommitRecord, Tier, SymbolRecord, CallEdge, UnresolvedCall, ActivityEvent, Touch } from "./types.ts";
 
 export interface DirModule {
   id: string;
@@ -51,6 +51,10 @@ export interface Snapshot {
     coupling: { a: string; b: string; together: number }[];
   };
   baseline?: DiffResult;
+  activity?: { events: ActivityEvent[]; touched: Record<string, Touch> };
+  /** 这次快照相对上一次重新解析了哪些文件。 */
+  changedFiles?: string[];
+  elapsedMs?: number;
 }
 
 export interface SnapshotOptions extends IndexOptions {
@@ -94,27 +98,28 @@ export function dirEdges(result: IndexResult): DirEdge[] {
   return [...map.values()].sort((x, y) => x.from.localeCompare(y.from) || x.to.localeCompare(y.to));
 }
 
-export async function buildSnapshot(root: string, options: SnapshotOptions): Promise<Snapshot> {
-  const result = await indexRepository(root, options);
-  const commits = await readHistory(root, { stageTag: result.overlay.stage_tag, ...(options.maxCommits ? { max: options.maxCommits } : {}) });
-  const stages = stageTimeline(commits);
-  let source: Snapshot["source"] = { commit: null, branch: null, dirty: false };
+export async function readSource(root: string): Promise<Snapshot["source"]> {
   try {
     const head = await currentHead(root);
     const dirty = Boolean((await git(root, ["status", "--porcelain"])).trim());
-    source = { ...head, dirty };
+    return { ...head, dirty };
   } catch {
-    /* 非 git 仓库 */
+    return { commit: null, branch: null, dirty: false };
   }
-  let baseline: DiffResult | undefined;
-  const b = readBaseline(options.stateDir);
-  if (b && source.commit) {
-    try {
-      baseline = await diffSinceBaseline(root, b);
-    } catch {
-      baseline = undefined;
-    }
-  }
+}
+
+export interface AssembleInput {
+  root: string;
+  result: IndexResult;
+  commits: CommitRecord[];
+  source: Snapshot["source"];
+  baseline?: DiffResult;
+  activity?: Snapshot["activity"];
+}
+
+/** 把索引结果、历史、基线、活动拼成快照；纯计算。 */
+export function assembleSnapshot({ root, result, commits, source, baseline, activity }: AssembleInput): Snapshot {
+  const stages = stageTimeline(commits);
   const latest = stages[stages.length - 1];
   const layersTier: Tier = result.rules.provenance.find((p) => p.what === "layers")?.tier ?? "T2";
   return {
@@ -126,7 +131,7 @@ export async function buildSnapshot(root: string, options: SnapshotOptions): Pro
       files: "T0", imports: "T0", edges: "T0", "modules.dir": "T1", "modules.layer": layersTier,
       dirEdges: "T1", violations: "T1", allowed: "T1", "history.commits": "T0", "history.stages": "T0",
       "history.hotspots": "T1", "history.coupling": "T1", "baseline.changes": "T0",
-      symbols: "T0", "calls.edges": "T0", "calls.unresolved": "T0",
+      symbols: "T0", "calls.edges": "T0", "calls.unresolved": "T0", "activity.events": "T0",
     },
     files: result.files,
     modules: dirModules(result),
@@ -147,15 +152,47 @@ export async function buildSnapshot(root: string, options: SnapshotOptions): Pro
       coupling: changeCoupling(commits, 30),
     },
     ...(baseline ? { baseline } : {}),
+    ...(activity ? { activity } : {}),
+    changedFiles: result.changedFiles,
+    elapsedMs: result.elapsedMs,
   };
+}
+
+export async function buildSnapshot(root: string, options: SnapshotOptions): Promise<Snapshot> {
+  const indexer = new Indexer(root, options);
+  try {
+    const result = await indexer.run();
+    const commits = await readHistory(root, { stageTag: result.overlay.stage_tag, ...(options.maxCommits ? { max: options.maxCommits } : {}) });
+    const source = await readSource(root);
+    let baseline: DiffResult | undefined;
+    const b = readBaseline(options.stateDir);
+    if (b && source.commit) {
+      try {
+        baseline = await diffSinceBaseline(root, b);
+      } catch {
+        baseline = undefined;
+      }
+    }
+    return assembleSnapshot({ root, result, commits, source, ...(baseline ? { baseline } : {}) });
+  } finally {
+    await indexer.close();
+  }
+}
+
+/** 原子写：先写临时文件再改名，读的一方永远看到完整 JSON。 */
+export function writeSnapshotJson(stateDir: string, snapshot: Snapshot): string {
+  fs.mkdirSync(stateDir, { recursive: true });
+  const jsonPath = path.join(stateDir, "snapshot.json");
+  const tmp = jsonPath + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(snapshot), "utf8");
+  fs.renameSync(tmp, jsonPath);
+  return jsonPath;
 }
 
 export async function writeSnapshot(root: string, options: SnapshotOptions): Promise<{ snapshot: Snapshot; jsonPath: string; dbPath: string }> {
   const snapshot = await buildSnapshot(root, options);
-  fs.mkdirSync(options.stateDir, { recursive: true });
-  const jsonPath = path.join(options.stateDir, "snapshot.json");
+  const jsonPath = writeSnapshotJson(options.stateDir, snapshot);
   const dbPath = path.join(options.stateDir, "facts.sqlite");
-  fs.writeFileSync(jsonPath, JSON.stringify(snapshot, null, 1), "utf8");
   writeFacts(dbPath, snapshot);
   return { snapshot, jsonPath, dbPath };
 }
@@ -168,6 +205,7 @@ export function summarizeSnapshot(s: Snapshot): string {
     `符号 ${s.symbols.length}，调用点 ${s.calls.sites}，调用边 ${s.calls.edges.length}（pyright 升级 ${s.calls.precise.upgraded}），未解析 ${s.calls.unresolved.length}`,
     `提交 ${s.history.commits.length}，阶段 ${s.history.stages.length}${s.history.latestStage ? `，最新 ${s.history.latestStage}` : ""}`,
     s.baseline ? `基线 ${s.baseline.baseline.commit.slice(0, 9)} 之后：${s.baseline.commitsSince} 个提交，${s.baseline.changes.length} 个文件变更` : "基线：未记录",
+    `耗时 ${((s.elapsedMs ?? 0) / 1000).toFixed(1)} 秒`,
   ];
   return lines.join("\n") + "\n";
 }

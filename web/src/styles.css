@@ -88,6 +88,17 @@ button { font: inherit; }
 .lane.up { background: var(--up); }
 .lane-label { position: absolute; top: 6px; left: 12px; font-size: 12px; font-weight: 600; color: #555; }
 .react-flow__node-lane { pointer-events: none; }
+.live.on { color: var(--green); }
+.live.off { color: var(--muted); }
+.activity { position: absolute; left: 0; right: 0; bottom: 0; height: 180px; background: rgba(255,255,255,0.96); border-top: 1px solid var(--border); display: flex; flex-direction: column; z-index: 5; }
+.activity-head { display: flex; justify-content: space-between; padding: 6px 12px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border); }
+.activity-list { overflow: auto; padding: 4px 12px; font-size: 12px; }
+.activity-row { display: flex; gap: 10px; padding: 2px 0; border-bottom: 1px dashed #eef0f3; }
+.activity-row .t { color: var(--muted); font-family: ui-monospace, Consolas, monospace; }
+.activity-row .src { width: 44px; color: var(--muted); }
+.activity-row.hook .src { color: var(--purple); }
+.activity-row .sess { font-family: ui-monospace, Consolas, monospace; color: var(--purple); }
+.activity-row .txt { flex: 1; word-break: break-all; }
 .legend { position: absolute; left: 12px; bottom: 12px; background: rgba(255,255,255,0.92); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 11px; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; }
 .legend i { display: inline-block; width: 14px; height: 0; border-top: 3px solid; border-color: inherit; vertical-align: middle; margin-right: 6px; background: none !important; }
 .legend div { display: flex; align-items: center; }

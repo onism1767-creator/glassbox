@@ -23,7 +23,9 @@ const help = `glassbox · 画布是代码的函数
   glassbox baseline show [仓库]
   glassbox diff [仓库]                        基线到工作区的变更，按顶层目录投影
   glassbox snapshot [仓库] [--max-commits N]   全量快照：写 状态目录/snapshot.json 与 facts.sqlite
-  glassbox serve [仓库] [--port 4400] [--refresh]  启动画布服务（先 npm run web:build）；无快照时自动生成
+  glassbox serve [仓库] [--port 4400]          启动画布服务（先 npm run web:build）：首次全量，之后监听文件增量重算并实时推送
+  glassbox hooks install [仓库] [--port 4400]  把 Claude Code hooks 装进仓库的 .claude/settings.json（SessionStart 记基线、PostToolUse 记触碰）
+  glassbox hooks print [--port 4400]          只打印 hooks 配置，自己合并
   glassbox help                              显示本帮助
 
   --overlay 文件   用指定的 overlay.yaml 代替仓库内 .workbench/overlay.yaml
@@ -125,8 +127,24 @@ async function main(): Promise<void> {
       const root = resolveRoot(positional[0]);
       const state = stateDirFor(root);
       const { serve } = await import("./serve.ts");
-      await serve(root, { stateDir: state, ...indexOptions(), port: Number(option("port") ?? "4400"), refresh: flag("refresh") });
+      await serve(root, { stateDir: state, ...indexOptions(), port: Number(option("port") ?? "4400") });
       return;
+    }
+    case "hooks": {
+      const sub = positional[0];
+      const port = Number(option("port") ?? "4400");
+      const { installHooks, hooksConfig } = await import("./hooks.ts");
+      if (sub === "install") {
+        const root = resolveRoot(positional[1]);
+        const { file, created } = installHooks(root, port);
+        process.stdout.write(`${created ? "已创建" : "已合并进"} ${file}\n新开的 Claude Code 会话会把事件发到 http://127.0.0.1:${port}/api/hook\n`);
+        return;
+      }
+      if (sub === "print") {
+        process.stdout.write(JSON.stringify({ hooks: hooksConfig(port) }, null, 2) + "\n");
+        return;
+      }
+      throw new Error("用法: glassbox hooks install|print [仓库]");
     }
     case "snapshot": {
       const root = resolveRoot(positional[0]);

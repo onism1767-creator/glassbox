@@ -1,5 +1,14 @@
 import type { Snapshot } from "../../src/snapshot.ts";
-import type { FileRecord, SymbolRecord, CallEdge, FileEdge, Violation, AllowedEdge, ChangeRecord, UnresolvedCall } from "../../src/types.ts";
+import type { FileRecord, SymbolRecord, CallEdge, FileEdge, Violation, AllowedEdge, ChangeRecord, UnresolvedCall, Touch } from "../../src/types.ts";
+
+/** 多久以前，人话。 */
+export function ago(at: string, now = Date.now()): string {
+  const s = Math.max(0, Math.round((now - Date.parse(at)) / 1000));
+  if (s < 60) return `${s} 秒前`;
+  if (s < 3600) return `${Math.round(s / 60)} 分钟前`;
+  if (s < 86400) return `${Math.round(s / 3600)} 小时前`;
+  return `${Math.round(s / 86400)} 天前`;
+}
 
 export type Level = { kind: "dirs" } | { kind: "files"; dir: string } | { kind: "symbols"; file: string };
 
@@ -81,8 +90,10 @@ export class SnapshotIndex {
   readonly layers: Record<string, number>;
   readonly maxLayer: number;
   readonly topDirs: string[];
+  readonly touched: Record<string, Touch>;
 
   constructor(readonly s: Snapshot) {
+    this.touched = s.activity?.touched ?? {};
     for (const f of s.files) {
       this.files.set(f.path, f);
       const top = topDir(f.path);
@@ -191,6 +202,8 @@ function dirGraph(ix: SnapshotIndex): Graph {
     if (layer !== undefined) badges.push({ text: `L${layer}`, tone: "blue" });
     if (violations) badges.push({ text: `违规 ${violations}`, tone: "red" });
     if (changed) badges.push({ text: `改动 ${changed}${uncommitted ? `（${uncommitted} 未提交）` : ""}`, tone: "amber" });
+    const touchedHere = files.filter((f) => ix.touched[f.path]).length;
+    if (touchedHere) badges.push({ text: `刚改 ${touchedHere}`, tone: "purple" });
     nodes.push({
       id: `dir:${dir}`,
       type: "dir",
@@ -229,6 +242,8 @@ function fileGraph(ix: SnapshotIndex, dir: string): Graph {
     const badges: GNode["badges"] = [];
     if (violations) badges.push({ text: `违规 ${violations}`, tone: "red" });
     if (change.status !== "clean") badges.push({ text: changeText(change.status, change.uncommitted), tone: change.status === "D" ? "red" : "amber" });
+    const touch = ix.touched[f.path];
+    if (touch) badges.push({ text: `刚改 · ${ago(touch.at)}${touch.session ? ` · ${touch.session}` : ""}`, tone: "purple" });
     if (symbols) badges.push({ text: `${symbols} 符号`, tone: "gray" });
     nodes.push({
       id: `file:${f.path}`,

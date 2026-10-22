@@ -1,5 +1,5 @@
 import path from "node:path";
-import { parse, grammarFor, unquote, type Node } from "./parser.ts";
+import { parse, grammarFor, unquote, type Node, type GrammarName } from "./parser.ts";
 import type { FileRecord, ImportRecord, FileEdge, ImportedName } from "./types.ts";
 
 export interface ImportContext {
@@ -13,6 +13,17 @@ export interface ImportContext {
   tsPaths: { baseUrl: string; patterns: { prefix: string; targets: string[] }[] } | null;
 }
 
+/** 解析前的 import 语句：只记语法，不做文件解析，所以可以按文件缓存。 */
+export interface RawImport {
+  spec: string;
+  line: number;
+  level: number;
+  names: ImportedName[];
+  kind: "python" | "js";
+  /** Python 的 from 语句：spec 是模块，names 是导入的名字；import 语句：names 为单个 module 别名。 */
+  fromStatement: boolean;
+}
+
 const PY_SUFFIXES = [".py", "/__init__.py"];
 const JS_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".json"];
 const JS_INDEXES = JS_EXTENSIONS.map((ext) => "/index" + ext);
@@ -20,6 +31,10 @@ const JS_INDEXES = JS_EXTENSIONS.map((ext) => "/index" + ext);
 function join(...parts: string[]): string {
   const joined = path.posix.normalize(path.posix.join(...parts));
   return joined === "." ? "" : joined.replace(/^\.\//, "");
+}
+
+function nodes(list: (Node | null)[]): Node[] {
+  return list.filter((n): n is Node => n !== null);
 }
 
 export function detectPythonRoots(files: FileRecord[], configured?: string[]): string[] {
@@ -113,24 +128,15 @@ function lineOf(node: Node): number {
   return node.startPosition.row + 1;
 }
 
-function nodes(list: (Node | null)[]): Node[] {
-  return list.filter((n): n is Node => n !== null);
-}
-
-async function pythonImports(file: string, source: string, ctx: ImportContext): Promise<ImportRecord[]> {
-  const tree = await parse("python", source);
-  if (!tree) return [];
-  const records: ImportRecord[] = [];
-  for (const node of nodes(tree.rootNode.descendantsOfType(["import_statement", "import_from_statement"]))) {
+function pythonRaw(root: Node): RawImport[] {
+  const out: RawImport[] = [];
+  for (const node of nodes(root.descendantsOfType(["import_statement", "import_from_statement"]))) {
     if (node.type === "import_statement") {
       for (const child of nodes(node.namedChildren)) {
         const nameNode = child.type === "aliased_import" ? child.childForFieldName("name") : child;
         if (!nameNode || nameNode.type !== "dotted_name") continue;
-        const spec = nameNode.text;
         const aliasNode = child.type === "aliased_import" ? child.childForFieldName("alias") : null;
-        const alias = aliasNode ? aliasNode.text : spec;
-        const names: ImportedName[] = [{ name: "", alias, kind: "module" }];
-        records.push({ from: file, spec, line: lineOf(node), level: 0, names, ...resolvePythonModule(spec, 0, file, ctx) });
+        out.push({ spec: nameNode.text, line: lineOf(node), level: 0, names: [{ name: "", alias: aliasNode ? aliasNode.text : nameNode.text, kind: "module" }], kind: "python", fromStatement: false });
       }
       continue;
     }
@@ -146,50 +152,14 @@ async function pythonImports(file: string, source: string, ctx: ImportContext): 
     } else {
       spec = moduleNode.text;
     }
-    const imported = nodes(node.childrenForFieldName("name")).map((n) => {
+    const names: ImportedName[] = nodes(node.childrenForFieldName("name")).map((n) => {
       const name = n.type === "aliased_import" ? n.childForFieldName("name")?.text ?? "" : n.text;
       const alias = n.type === "aliased_import" ? n.childForFieldName("alias")?.text ?? name : name;
-      return { name, alias };
+      return { name, alias, kind: "named" as const };
     }).filter((x) => x.name);
-    const base = resolvePythonModule(spec, level, file, ctx);
-    const remaining: ImportedName[] = [];
-    for (const { name, alias } of imported) {
-      const sub = resolvePythonModule(spec ? `${spec}.${name}` : name, level, file, ctx);
-      if (sub.status === "resolved" && sub.resolved !== base.resolved) {
-        records.push({ from: file, spec: spec ? `${spec}.${name}` : `${".".repeat(level)}${name}`, line: lineOf(node), level, names: [{ name: "", alias, kind: "module" }], ...sub });
-      } else {
-        remaining.push({ name, alias, kind: "named" });
-      }
-    }
-    if (remaining.length || base.status === "resolved" || !imported.length) {
-      records.push({ from: file, spec: `${".".repeat(level)}${spec}`, line: lineOf(node), level, names: remaining, ...base });
-    }
+    out.push({ spec, line: lineOf(node), level, names, kind: "python", fromStatement: true });
   }
-  return records;
-}
-
-async function jsImports(file: string, source: string, grammar: "javascript" | "typescript" | "tsx", ctx: ImportContext): Promise<ImportRecord[]> {
-  const tree = await parse(grammar, source);
-  if (!tree) return [];
-  const records: ImportRecord[] = [];
-  const add = (spec: string, node: Node, names?: ImportedName[]): void => {
-    records.push({ from: file, spec, line: lineOf(node), level: 0, ...(names ? { names } : {}), ...resolveJsSpec(spec, file, ctx) });
-  };
-  for (const node of nodes(tree.rootNode.descendantsOfType(["import_statement", "export_statement", "call_expression"]))) {
-    if (node.type === "import_statement" || node.type === "export_statement") {
-      const sourceNode = node.childForFieldName("source");
-      if (sourceNode) add(unquote(sourceNode.text), node, node.type === "import_statement" ? jsImportedNames(node) : undefined);
-      continue;
-    }
-    const fn = node.childForFieldName("function");
-    const args = node.childForFieldName("arguments");
-    if (!fn || !args) continue;
-    if (fn.type !== "identifier" && fn.type !== "import") continue;
-    if (fn.type === "identifier" && fn.text !== "require") continue;
-    const first = nodes(args.namedChildren)[0];
-    if (first && (first.type === "string" || first.type === "template_string")) add(unquote(first.text), node);
-  }
-  return records;
+  return out;
 }
 
 /** `import d, { a, b as c } from "x"` / `import * as ns from "x"` 带进来的名字。 */
@@ -214,6 +184,61 @@ function jsImportedNames(node: Node): ImportedName[] {
   return names;
 }
 
+function jsRaw(root: Node): RawImport[] {
+  const out: RawImport[] = [];
+  for (const node of nodes(root.descendantsOfType(["import_statement", "export_statement", "call_expression"]))) {
+    if (node.type === "import_statement" || node.type === "export_statement") {
+      const sourceNode = node.childForFieldName("source");
+      if (sourceNode) out.push({ spec: unquote(sourceNode.text), line: lineOf(node), level: 0, names: node.type === "import_statement" ? jsImportedNames(node) : [], kind: "js", fromStatement: true });
+      continue;
+    }
+    const fn = node.childForFieldName("function");
+    const args = node.childForFieldName("arguments");
+    if (!fn || !args) continue;
+    if (fn.type !== "identifier" && fn.type !== "import") continue;
+    if (fn.type === "identifier" && fn.text !== "require") continue;
+    const first = nodes(args.namedChildren)[0];
+    if (first && (first.type === "string" || first.type === "template_string")) out.push({ spec: unquote(first.text), line: lineOf(node), level: 0, names: [], kind: "js", fromStatement: true });
+  }
+  return out;
+}
+
+/** 单个文件的 import 语句，按语法提取，不解析目标。 */
+export async function extractRawImports(file: string, source: string, grammar: GrammarName): Promise<RawImport[]> {
+  const tree = await parse(grammar, source);
+  if (!tree) return [];
+  return grammar === "python" ? pythonRaw(tree.rootNode) : jsRaw(tree.rootNode);
+}
+
+/** 把一个文件的 raw import 解析到项目内文件。 */
+export function resolveImports(file: string, raw: RawImport[], ctx: ImportContext): ImportRecord[] {
+  const records: ImportRecord[] = [];
+  for (const r of raw) {
+    if (r.kind === "js") {
+      records.push({ from: file, spec: r.spec, line: r.line, level: 0, names: r.names, ...resolveJsSpec(r.spec, file, ctx) });
+      continue;
+    }
+    if (!r.fromStatement) {
+      records.push({ from: file, spec: r.spec, line: r.line, level: 0, names: r.names, ...resolvePythonModule(r.spec, 0, file, ctx) });
+      continue;
+    }
+    const base = resolvePythonModule(r.spec, r.level, file, ctx);
+    const remaining: ImportedName[] = [];
+    for (const n of r.names) {
+      const sub = resolvePythonModule(r.spec ? `${r.spec}.${n.name}` : n.name, r.level, file, ctx);
+      if (sub.status === "resolved" && sub.resolved !== base.resolved) {
+        records.push({ from: file, spec: r.spec ? `${r.spec}.${n.name}` : `${".".repeat(r.level)}${n.name}`, line: r.line, level: r.level, names: [{ name: "", alias: n.alias, kind: "module" }], ...sub });
+      } else {
+        remaining.push(n);
+      }
+    }
+    if (remaining.length || base.status === "resolved" || !r.names.length) {
+      records.push({ from: file, spec: `${".".repeat(r.level)}${r.spec}`, line: r.line, level: r.level, names: remaining, ...base });
+    }
+  }
+  return records;
+}
+
 export async function extractImports(files: FileRecord[], contents: Map<string, string>, ctx: ImportContext): Promise<ImportRecord[]> {
   const all: ImportRecord[] = [];
   for (const f of files) {
@@ -221,8 +246,7 @@ export async function extractImports(files: FileRecord[], contents: Map<string, 
     const source = contents.get(f.path);
     if (!grammar || source === undefined) continue;
     try {
-      const records = grammar === "python" ? await pythonImports(f.path, source, ctx) : await jsImports(f.path, source, grammar, ctx);
-      all.push(...records);
+      all.push(...resolveImports(f.path, await extractRawImports(f.path, source, grammar), ctx));
     } catch (error) {
       all.push({ from: f.path, spec: "", line: 1, level: 0, status: "unresolved", reason: `解析失败: ${error instanceof Error ? error.message : String(error)}` });
     }
