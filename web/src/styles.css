@@ -88,8 +88,12 @@ button { font: inherit; }
 .gauge-verdict { margin-top: 6px; font-size: 12px; font-weight: 600; }
 .gauge-verdict.ok { color: var(--green); }
 .gauge-verdict.bad { color: var(--red); }
-.inconsistency { font-size: 12px; color: var(--red); margin: 4px 0; cursor: pointer; }
+.inconsistency { font-size: 12px; margin: 4px 0; cursor: pointer; }
+.inconsistency.warn { color: var(--amber); }
+.inconsistency.info { color: var(--muted); }
 .inconsistency .kind { font-weight: 600; margin-right: 4px; }
+.bar .fill.done { background: var(--green); }
+.bar .fill.todo { background: #c9cdd3; }
 .task-row { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; margin: 4px 0; cursor: pointer; background: #fff; }
 .task-row:hover { border-color: var(--border); background: var(--bg); }
 .task-row.selected { outline: 2px solid #e6a700; outline-offset: 1px; }

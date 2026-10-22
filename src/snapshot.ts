@@ -8,7 +8,7 @@ import { git } from "./files.ts";
 import { writeFacts } from "./store.ts";
 import { computeTech, type TechStack } from "./tech.ts";
 import { parseEmojiList, readStandardTasks, type TaskRecord } from "./tasks.ts";
-import { computeProgress, computeGauge, findInconsistencies, type TaskProgress, type StageGauge, type Inconsistency } from "./progress.ts";
+import { computeAllProgress, computeGauge, findInconsistencies, type TaskProgress, type StageGauge, type Inconsistency } from "./progress.ts";
 import type { FileRecord, ImportRecord, FileEdge, LayerRules, Violation, AllowedEdge, CommitRecord, Tier, SymbolRecord, CallEdge, UnresolvedCall, ActivityEvent, Touch } from "./types.ts";
 
 export interface DirModule {
@@ -61,7 +61,7 @@ export interface Snapshot {
   tech: TechStack;
   /** 任务：声明层（任务文件）+ 证据层（进度信号、阶段对照、不一致）。 */
   tasks?: {
-    source: { file: string; format: "emoji-list" | "standard"; tier: Tier };
+    source: { file: string; format: "emoji-list" | "standard"; tier: Tier; readAt?: string };
     items: TaskRecord[];
     progress: Record<string, TaskProgress>;
     gauge: StageGauge;
@@ -150,15 +150,10 @@ function buildTasks(input: AssembleInput): Snapshot["tasks"] | undefined {
     }
   }
   if (!source) return undefined;
-  const progress: Record<string, TaskProgress> = {};
-  const map = new Map<string, TaskProgress>();
-  for (const t of items) {
-    const p = computeProgress(t, commits, baseline?.changes ?? [], activity?.touched ?? {}, Date.now(), items.filter((k) => k.parent === t.id));
-    progress[t.id] = p;
-    map.set(t.id, p);
-  }
-  const gauge = computeGauge(items, commits);
-  return { source, items, progress, gauge, inconsistencies: findInconsistencies(items, map, gauge) };
+  const map = computeAllProgress(items, { commits, changes: baseline?.changes ?? [], touched: activity?.touched ?? {} });
+  const progress: Record<string, TaskProgress> = Object.fromEntries(map);
+  const gauge = computeGauge(items, commits, map);
+  return { source: { ...source, readAt: new Date().toISOString() }, items, progress, gauge, inconsistencies: findInconsistencies(items, map, gauge) };
 }
 
 /** 把索引结果、历史、基线、活动拼成快照；纯计算。 */

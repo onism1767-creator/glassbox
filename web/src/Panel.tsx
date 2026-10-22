@@ -293,8 +293,14 @@ function TaskPanel({ ix, id, openEvidence, open, onNavigate }: { ix: SnapshotInd
   return (
     <aside className="panel">
       <h2>任务 {t.id} · {t.title}</h2>
+      <p className="small">
+        代码说：<b>{statusWord(p?.derived.status ?? t.status)}</b>{p?.derived.certainty === "推测" ? "（推测）" : ""} <Tier t={p?.derived.tier ?? "T2"} />
+        <br />
+        <span className="muted">{p?.derived.basis}</span>
+      </p>
       <p className="muted small">
-        状态「{statusWord(t.status)}」，写在 <EvidenceLine ev={t.source} onOpen={openEvidence} /> <Tier t={tasks.source.tier} />
+        文档写的是「{statusWord(t.status)}」，在 <EvidenceLine ev={t.source} onOpen={openEvidence} /> <Tier t={tasks.source.tier} />
+        {p && p.derived.certainty !== "只有文档说法" && p.derived.status !== t.status ? <span className="amber"> 文档没跟着更新，以代码为准</span> : null}
       </p>
       <dl>
         {t.stage ? (<><dt>属于哪一步（阶段编号）</dt><dd>{t.stage.text}{t.parent ? `，上级 ${t.parent}` : ""}</dd></>) : null}
@@ -321,7 +327,7 @@ function TaskPanel({ ix, id, openEvidence, open, onNavigate }: { ix: SnapshotInd
         </dd>
         <dt>提到它的提交 <Tier t="T0" /></dt>
         <dd>{p?.commits.length ? p.commits.map((c) => <div key={c.sha}><span className="muted">{c.date.slice(0, 10)} {c.sha.slice(0, 7)}</span> {c.subject}</div>) : "没有"}</dd>
-        {mine.length ? (<><dt className="red">对不上的地方</dt><dd>{mine.map((i, k) => <div key={k} className="red">{i.kind}：{i.text}</div>)}</dd></>) : null}
+        {mine.length ? (<><dt>文档和代码对不上的地方</dt><dd>{mine.map((i, k) => <div key={k} className={i.severity === "warn" ? "amber" : "muted"}>{i.kind}：{i.text}</div>)}</dd></>) : null}
         {t.criteria.length ? (<><dt>验收标准（任务文件里的复选框）</dt><dd>{t.criteria.map((c, k) => <div key={k}>{c.done ? "☑" : "☐"} {c.text}</div>)}</dd></>) : null}
       </dl>
       {open ? <SourceBlock open={open} /> : null}
