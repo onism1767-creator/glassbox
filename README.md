@@ -42,6 +42,7 @@ node src/cli.ts snapshot <仓库>
 6. [阶段 1 对照记录](docs/阶段1-对照/阶段1-对照记录.md)：原版 nativue-ai 在 GEO 工具上的 Windows 实测
 7. [阶段 2 记录](docs/阶段2-索引器/阶段2-记录.md)：事实索引器，与 GEO 守卫测试结论一致
 8. [阶段 3 记录](docs/阶段3-符号级/阶段3-记录.md)：符号级调用图，语法层加 pyright 精确层，GEO 手工核对
+9. [错误库](docs/错误库.md)：遇到的错误、原因、解决方案，以及未解决的问题
 
 技术决定：TypeScript on Node 24；tree-sitter 做语法结构；符号级调用图用 tree-sitter 语法层加 pyright 语言服务器精确层（原定的 scip-python 在 Windows 启动即崩，见阶段 3 记录）；node:sqlite 做事实库；React Flow 加 ELK 做画布；任务是仓库内 Markdown 文件；Claude Code hooks 做实时事件，协议本身与 AI 工具无关。
 
