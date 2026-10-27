@@ -11,8 +11,11 @@ const run = promisify(execFile);
 const EXCLUDED_DIRS = new Set([
   ".git", ".workbench", ".nativue", "node_modules", ".venv", "venv", "__pycache__",
   "dist", "build", ".next", "target", "vendor", "coverage", ".cache", ".mypy_cache",
-  ".pytest_cache", ".ruff_cache", ".idea", ".vscode",
+  ".pytest_cache", ".ruff_cache", ".idea", ".vscode", ".pgdata", ".hypothesis", ".tox", ".nox", ".eggs",
 ]);
+
+/** 以点开头的目录里只有这几个是"源码或配置"，其余（数据库数据、缓存、工具状态）一律不看也不监听。 */
+const DOT_DIRS_KEPT = new Set([".claude", ".github", ".gitlab", ".circleci", ".devcontainer", ".husky", ".storybook"]);
 
 /** 永远排除的敏感文件。 */
 const SENSITIVE = /(^|\/)(?:\.env(?:\..*)?|\.npmrc|\.pypirc|\.netrc|id_(?:rsa|ed25519)|.*\.(?:pem|key|p12|pfx)|.*(?:credential|secret|token)s?\.json)$/i;
@@ -46,7 +49,10 @@ export function globToRegExp(pattern: string): RegExp {
 }
 
 export function isExcluded(rel: string, extra: RegExp[]): boolean {
-  if (rel.split("/").some((seg) => EXCLUDED_DIRS.has(seg))) return true;
+  const segs = rel.split("/");
+  if (segs.some((seg) => EXCLUDED_DIRS.has(seg))) return true;
+  // 目录段（最后一段是文件名，不算）以点开头且不在保留名单里：排除。
+  if (segs.slice(0, -1).some((seg) => seg.startsWith(".") && !DOT_DIRS_KEPT.has(seg))) return true;
   if (SENSITIVE.test(rel)) return true;
   return extra.some((rx) => rx.test(rel));
 }
