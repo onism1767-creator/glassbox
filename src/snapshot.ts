@@ -9,6 +9,7 @@ import { writeFacts } from "./store.ts";
 import { computeTech, type TechStack } from "./tech.ts";
 import { parseEmojiList, readStandardTasks, type TaskRecord } from "./tasks.ts";
 import { computeAllProgress, computeGauge, findInconsistencies, type TaskProgress, type StageGauge, type Inconsistency } from "./progress.ts";
+import { readTestResults, type TestSnapshot } from "./tests.ts";
 import type { FileRecord, ImportRecord, FileEdge, LayerRules, Violation, AllowedEdge, CommitRecord, Tier, SymbolRecord, CallEdge, UnresolvedCall, ActivityEvent, Touch } from "./types.ts";
 
 export interface DirModule {
@@ -59,6 +60,8 @@ export interface Snapshot {
   names: { layers: Record<string, string>; dirs: Record<string, string>; tier: Tier };
   /** 用到的技术：声明的依赖对照实际 import。 */
   tech: TechStack;
+  /** 测试结果：junit 与 coverage。 */
+  tests?: TestSnapshot;
   /** 任务：声明层（任务文件）+ 证据层（进度信号、阶段对照、不一致）。 */
   tasks?: {
     source: { file: string; format: "emoji-list" | "standard"; tier: Tier; readAt?: string };
@@ -132,9 +135,11 @@ export interface AssembleInput {
   activity?: Snapshot["activity"];
   /** .workbench/tasks 这类 standard 任务目录。 */
   standardTasksDir?: string;
+  /** 状态目录，用来找 test-results。 */
+  stateDir?: string;
 }
 
-function buildTasks(input: AssembleInput): Snapshot["tasks"] | undefined {
+function buildTasks(input: AssembleInput, tests: TestSnapshot | undefined): Snapshot["tasks"] | undefined {
   const { result, commits, baseline, activity, standardTasksDir } = input;
   let items: TaskRecord[] = [];
   let source: NonNullable<Snapshot["tasks"]>["source"] | null = null;
@@ -150,7 +155,7 @@ function buildTasks(input: AssembleInput): Snapshot["tasks"] | undefined {
     }
   }
   if (!source) return undefined;
-  const map = computeAllProgress(items, { commits, changes: baseline?.changes ?? [], touched: activity?.touched ?? {} });
+  const map = computeAllProgress(items, { commits, changes: baseline?.changes ?? [], touched: activity?.touched ?? {}, ...(tests ? { tests } : {}) });
   const progress: Record<string, TaskProgress> = Object.fromEntries(map);
   const gauge = computeGauge(items, commits, map);
   return { source: { ...source, readAt: new Date().toISOString() }, items, progress, gauge, inconsistencies: findInconsistencies(items, map, gauge) };
@@ -162,7 +167,8 @@ export function assembleSnapshot(input: AssembleInput): Snapshot {
   const stages = stageTimeline(commits);
   const latest = stages[stages.length - 1];
   const layersTier: Tier = result.rules.provenance.find((p) => p.what === "layers")?.tier ?? "T2";
-  const tasks = buildTasks(input);
+  const tests = input.stateDir ? readTestResults(root, input.stateDir, new Set(result.files.map((f) => f.path)), result.edges, result.overlay.test_results ?? {}) : undefined;
+  const tasks = buildTasks(input, tests);
   return {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
@@ -196,6 +202,7 @@ export function assembleSnapshot(input: AssembleInput): Snapshot {
     ...(activity ? { activity } : {}),
     names: { layers: result.overlay.names?.layers ?? {}, dirs: result.overlay.names?.dirs ?? {}, tier: "T2" },
     tech: computeTech(result.imports, result.manifests),
+    ...(tests ? { tests } : {}),
     ...(tasks ? { tasks } : {}),
     changedFiles: result.changedFiles,
     elapsedMs: result.elapsedMs,
@@ -217,7 +224,7 @@ export async function buildSnapshot(root: string, options: SnapshotOptions): Pro
         baseline = undefined;
       }
     }
-    return assembleSnapshot({ root, result, commits, source, ...(baseline ? { baseline } : {}), standardTasksDir: path.join(options.stateDir, "tasks") });
+    return assembleSnapshot({ root, result, commits, source, ...(baseline ? { baseline } : {}), standardTasksDir: path.join(options.stateDir, "tasks"), stateDir: options.stateDir });
   } finally {
     await indexer.close();
   }

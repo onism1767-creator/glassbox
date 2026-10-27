@@ -55,6 +55,9 @@ button { font: inherit; }
 .evidence .mark.red { background: #fcebeb; color: #a32d2d; }
 .evidence .mark.amber { background: #faeeda; color: #854f0b; }
 .edge-group { margin: 4px 0 8px; }
+.tests { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 8px; }
+.tests h3 { font-size: 13px; margin: 0 0 4px; }
+.green { color: var(--green); }
 .tech { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 8px; }
 .tech h3 { font-size: 13px; margin: 0 0 4px; }
 .small { font-size: 12px; }

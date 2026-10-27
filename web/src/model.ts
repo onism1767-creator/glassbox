@@ -192,6 +192,36 @@ export class SnapshotIndex {
   fileEdgesBetweenDirs(from: string, to: string): FileEdge[] {
     return this.s.edges.filter((e) => topDir(e.from) === from && topDir(e.to) === to);
   }
+
+  /** 一组文件的测试徽章：有失败就红；否则给覆盖率或相关测试数。 */
+  testBadge(paths: string[]): GNode["badges"][number] | undefined {
+    const t = this.s.tests;
+    if (!t?.run) return undefined;
+    let failed = 0;
+    let passed = 0;
+    let covSum = 0;
+    let covN = 0;
+    const seen = new Set<string>();
+    for (const p of paths) {
+      const st = t.fileStatus[p];
+      if (!st) continue;
+      for (const id of st.related) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+      }
+      failed += st.failed + st.errors;
+      passed += st.passed;
+      if (st.coverage && st.coverage.total > 0) {
+        covSum += st.coverage.percent;
+        covN++;
+      }
+    }
+    if (failed) return { text: `相关测试失败 ${failed} 个`, tone: "red" };
+    if (paths.length === 1 && covN) return { text: `测试跑到 ${Math.round(covSum)}%（覆盖率）${passed ? ` · ${passed} 个测试通过` : ""}`, tone: "green" };
+    if (covN) return { text: `平均覆盖率 ${Math.round(covSum / covN)}%`, tone: "green" };
+    if (passed) return { text: `${passed} 个相关测试通过`, tone: "green" };
+    return undefined;
+  }
 }
 
 const SIZE = { dir: { width: 230, height: 84 }, file: { width: 240, height: 64 }, symbol: { width: 250, height: 54 }, portal: { width: 200, height: 48 } };
@@ -221,6 +251,8 @@ function dirGraph(ix: SnapshotIndex): Graph {
     if (changed) badges.push({ text: WORDS.changedFiles(changed, uncommitted), tone: "amber" });
     const touchedHere = files.filter((f) => ix.touched[f.path]).length;
     if (touchedHere) badges.push({ text: WORDS.touched(touchedHere), tone: "purple" });
+    const tb = ix.testBadge(files.map((f) => f.path));
+    if (tb) badges.push(tb);
     nodes.push({
       id: `dir:${dir}`,
       type: "dir",
@@ -263,6 +295,8 @@ function fileGraph(ix: SnapshotIndex, dir: string): Graph {
     if (change.status !== "clean") badges.push({ text: changeWord(change.status, change.uncommitted), tone: change.status === "D" ? "red" : "amber" });
     const touch = ix.touched[f.path];
     if (touch) badges.push({ text: `Claude 刚改过 · ${ago(touch.at)}${touch.session ? ` · 会话 ${touch.session}` : ""}`, tone: "purple" });
+    const tb = ix.testBadge([f.path]);
+    if (tb) badges.push(tb);
     if (symbols) badges.push({ text: WORDS.symbols(symbols), tone: "gray" });
     nodes.push({
       id: `file:${f.path}`,

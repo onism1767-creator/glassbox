@@ -85,7 +85,13 @@ export function parseEmojiList(file: string, text: string): TaskRecord[] {
     }
     if (!id) id = `行 ${i + 1}`;
     const cut = rest.search(/[（(:：;；]/);
-    const title = (cut >= 0 ? rest.slice(0, cut) : rest).replace(/\*\*/g, "").trim().slice(0, 80) || id;
+    let title = (cut >= 0 ? rest.slice(0, cut) : rest).replace(/\*\*/g, "").trim().slice(0, 80);
+    if (!title) {
+      // 像「**S8.1**(2026-10-14;329 测试全绿)文案与数字:…」：编号后面紧跟括号里的验收说明，标题在括号后面
+      const after = /^[（(][^）)]*[）)]\s*([^（(:：;；。]+)/.exec(rest);
+      title = (after?.[1] ?? "").replace(/\*\*/g, "").trim().slice(0, 80);
+    }
+    if (!title) title = id;
     const dates = [...line.matchAll(DATE_RX)].map((x) => x[0]).sort();
     const files = [...new Set([...line.matchAll(FILE_RX)].map((x) => x[1] ?? "").filter(Boolean))];
     const tests = /(\d+)\s*测试全绿/.exec(line);

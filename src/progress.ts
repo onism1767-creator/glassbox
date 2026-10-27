@@ -3,6 +3,7 @@
  * 原则（用户 2026-10-22 定）：任务文档读一次当「计划清单」，做没做完以代码为准；文档没更新不算错。
  */
 import { compareStage, parseStage, type TaskRecord, type StageKey, type TaskStatus } from "./tasks.ts";
+import type { TestSnapshot } from "./tests.ts";
 import type { CommitRecord, ChangeRecord, Tier, Touch } from "./types.ts";
 
 export interface Signal {
@@ -35,6 +36,8 @@ export interface TaskProgress {
   formula: string;
   commits: { sha: string; date: string; subject: string }[];
   active: boolean;
+  /** 相关测试里失败的数量（含 error）；没有相关测试时 undefined。 */
+  testsFailed?: number;
 }
 
 export interface StageGauge {
@@ -128,7 +131,32 @@ export interface ProgressContext {
   commits: CommitRecord[];
   changes: ChangeRecord[];
   touched: Record<string, Touch>;
+  tests?: TestSnapshot;
   now?: number;
+}
+
+/** 任务提到的文件相关的测试：通过几个、失败几个，来源是上下文（T0）还是 import 推断（T1）。 */
+function relatedTests(task: TaskRecord, tests: TestSnapshot | undefined): { ids: string[]; passed: number; failed: number; tier: Tier } | undefined {
+  if (!tests?.run) return undefined;
+  const ids = new Set<string>();
+  let anyT1 = false;
+  for (const f of task.files) {
+    const st = tests.fileStatus[f];
+    if (!st) continue;
+    for (const id of st.related) ids.add(id);
+    if (st.tier === "T1" && st.related.length) anyT1 = true;
+  }
+  if (!ids.size) return undefined;
+  const byId = new Map(tests.run.cases.map((c) => [c.id, c]));
+  let passed = 0;
+  let failed = 0;
+  for (const id of ids) {
+    const c = byId.get(id);
+    if (!c) continue;
+    if (c.status === "passed") passed++;
+    else if (c.status === "failed" || c.status === "error") failed++;
+  }
+  return { ids: [...ids], passed, failed, tier: anyT1 ? "T1" : "T0" };
 }
 
 /** 给一批任务算进度：先算叶子，再算父任务（父任务看子任务）。 */
@@ -164,7 +192,23 @@ export function computeAllProgress(tasks: TaskRecord[], ctx: ProgressContext): M
       signals.push({ name: "子任务", value: v, text: `子任务按代码判断完成 ${done} / ${children.length}`, tier: "T1", source: "缩进在它下面的条目，各自按代码判断" });
       weights.push({ w: 0.5, v });
     }
-    signals.push({ name: "测试", text: "还没接测试结果（无数据）", tier: "T0", source: "pytest / junit，尚未接入" });
+    const rel = relatedTests(task, ctx.tests);
+    let testsFailed: number | undefined;
+    if (!ctx.tests?.run) {
+      signals.push({ name: "测试", text: "还没有测试结果（跑一次 glassbox test）", tier: "T0", source: "junit" });
+    } else if (rel && rel.passed + rel.failed > 0) {
+      const v = rel.passed / (rel.passed + rel.failed);
+      testsFailed = rel.failed;
+      signals.push({ name: "测试", value: v, text: `和它提到的文件相关的测试 ${rel.passed + rel.failed} 个：通过 ${rel.passed}、失败 ${rel.failed}`, tier: rel.tier, source: rel.tier === "T0" ? "coverage 上下文：这些测试真的跑过这些文件" : "import 图推断：测试文件 import 了这些文件" });
+      weights.push({ w: 0.3, v });
+    } else {
+      signals.push({ name: "测试", text: task.files.length ? "它提到的文件对不上任何测试（没有覆盖率上下文，也没有测试文件 import 它们）" : "任务没提到文件，对不上具体测试", tier: "T0", source: "junit / coverage" });
+    }
+    if (task.testsClaimed && ctx.tests?.run) {
+      const r = ctx.tests.run;
+      const ok = r.failed === 0 && r.errors === 0 && r.total >= task.testsClaimed;
+      signals.push({ name: "验收声明", value: ok ? 1 : 0, text: `行里写「${task.testsClaimed} 测试全绿」；最近一次实测 ${r.passed} 通过、${r.failed + r.errors} 失败、${r.skipped} 跳过（共 ${r.total}）→ ${ok ? "与声明一致" : r.failed + r.errors ? "现在有失败，与声明不符" : `总数比声明少，无法确认`}`, tier: "T0", source: r.source });
+    }
     if (task.files.length) {
       const v = hit.length / task.files.length;
       signals.push({ name: "文件改动", value: v, text: `提到的 ${task.files.length} 个文件里，这次会话改了 ${hit.length} 个`, tier: task.filesTier === "T2" ? "T0" : "T1", source: task.filesTier === "T2" ? "任务声明的文件 × git 差异" : "任务行里反引号提到的文件（猜的）× git 差异" });
@@ -190,7 +234,7 @@ export function computeAllProgress(tasks: TaskRecord[], ctx: ProgressContext): M
       percent = range[0];
       formula = `代码说正在做（${derived.basis}），没有更细的信号，画在区间起点`;
     }
-    const p: TaskProgress = { taskId: task.id, derived, docStatus: task.status, ...(percent !== undefined ? { percent } : {}), range, signals, formula, commits: referencing.slice(0, 10), active };
+    const p: TaskProgress = { taskId: task.id, derived, docStatus: task.status, ...(percent !== undefined ? { percent } : {}), range, signals, formula, commits: referencing.slice(0, 10), active, ...(testsFailed !== undefined ? { testsFailed } : {}) };
     memo.set(task, p);
     return p;
   };
@@ -253,6 +297,9 @@ export function findInconsistencies(tasks: TaskRecord[], progress: Map<string, T
     if (!p) continue;
     if (p.derived.certainty !== "只有文档说法" && p.derived.status !== t.status) {
       out.push({ taskId: t.id, kind: "文档没更新", text: `${t.id} 文档写「${t.status}」，代码说「${p.derived.status}」：${p.derived.basis}`, severity: "info" });
+    }
+    if (p.derived.status === "done" && (p.testsFailed ?? 0) > 0) {
+      out.push({ taskId: t.id, kind: "完成但相关测试红", text: `${t.id} 按代码判断完成，但和它相关的测试有 ${p.testsFailed} 个失败`, severity: "warn" });
     }
     if (p.derived.status === "developing" && p.derived.certainty === "推测") {
       const latest = p.commits[0]?.date;

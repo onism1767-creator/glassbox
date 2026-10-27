@@ -21,7 +21,7 @@ export interface RuntimeOptions extends IndexOptions {
 
 export interface UpdateMessage {
   at: string;
-  reason: "initial" | "files" | "git" | "hook" | "manual" | "refine";
+  reason: "initial" | "files" | "git" | "hook" | "manual" | "refine" | "tests";
   changed: string[];
   elapsedMs: number;
   violations: number;
@@ -35,6 +35,7 @@ export class Runtime {
   snapshot: Snapshot | null = null;
   private commits: CommitRecord[] = [];
   private watcher: fs.FSWatcher | null = null;
+  private resultsWatcher: fs.FSWatcher | null = null;
   private pending = new Set<string>();
   private gitChanged = false;
   private pendingReason: UpdateMessage["reason"] = "files";
@@ -68,11 +69,29 @@ export class Runtime {
     } catch (error) {
       this.log(`无法监听目录：${error instanceof Error ? error.message : String(error)}`);
     }
+    // 状态目录在仓库外时，单独盯着它的 test-results（glassbox test 往那里写）。
+    const results = path.join(this.options.stateDir, "test-results");
+    if (!results.startsWith(this.root)) {
+      fs.mkdirSync(results, { recursive: true });
+      try {
+        this.resultsWatcher = fs.watch(results, (_event, filename) => {
+          if (typeof filename === "string" && /\.(xml|json)$/.test(filename)) {
+            this.pendingReason = "tests";
+            this.schedule(this.options.debounceMs ?? 250);
+          }
+        });
+        this.resultsWatcher.on("error", () => undefined);
+      } catch {
+        /* 盯不住也不影响 */
+      }
+    }
   }
 
   async stop(): Promise<void> {
     this.watcher?.close();
     this.watcher = null;
+    this.resultsWatcher?.close();
+    this.resultsWatcher = null;
     if (this.timer) clearTimeout(this.timer);
     for (const c of this.clients) c.end();
     this.clients.clear();
@@ -87,8 +106,8 @@ export class Runtime {
       if (inner === "HEAD" || inner === "ORIG_HEAD" || inner === "packed-refs" || inner.startsWith("refs/") || inner === "logs/HEAD") return "git";
       return "ignore";
     }
-    // 标准任务目录在 .workbench 里，索引器不读它，但它变了要重算任务。
-    if (rel.startsWith(".workbench/tasks/")) return "file";
+    // 标准任务目录和测试结果在 .workbench 里，索引器不读它们，但它们变了要重算。
+    if (rel.startsWith(".workbench/tasks/") || rel.startsWith(".workbench/test-results/")) return "file";
     if (isExcluded(rel, this.excludes)) return "ignore";
     return "file";
   }
@@ -157,6 +176,9 @@ export class Runtime {
     const elapsedMs = Date.now() - started;
     if (reason === "refine") {
       this.activity.record({ at: new Date().toISOString(), source: "system", kind: "refine", text: `细化：导入方的精确层已更新，${(elapsedMs / 1000).toFixed(1)} 秒` });
+    } else if (reason === "tests") {
+      const r = this.snapshot?.tests?.run;
+      this.activity.record({ at: new Date().toISOString(), source: "system", kind: "tests", text: r ? `测试结果更新：${r.passed} 通过、${r.failed + r.errors} 失败、${r.skipped} 跳过` : "测试结果文件变了" });
     } else if (reason !== "initial") {
       this.activity.record({
         at: new Date().toISOString(),
@@ -173,6 +195,7 @@ export class Runtime {
       ...(baseline ? { baseline } : {}),
       activity: { events: this.activity.recent(200), touched: this.activity.touched() },
       standardTasksDir: path.join(this.options.stateDir, "tasks"),
+      stateDir: this.options.stateDir,
     });
     writeSnapshotJson(this.options.stateDir, this.snapshot);
     const message: UpdateMessage = { at: this.snapshot.generatedAt, reason, changed, elapsedMs, violations: result.violations.length, files: result.files.length };

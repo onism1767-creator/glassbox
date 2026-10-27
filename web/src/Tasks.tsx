@@ -21,6 +21,8 @@ function Bar({ p }: { p?: TaskProgress }) {
 function Row({ t, p, selected, onSelect }: { t: TaskRecord; p?: TaskProgress; selected: boolean; onSelect: (id: string | null) => void }) {
   const files = t.files.length;
   const changedSignal = p?.signals.find((s) => s.name === "文件改动");
+  const testSignal = p?.signals.find((s) => s.name === "测试" && s.value !== undefined);
+  const claim = p?.signals.find((s) => s.name === "验收声明");
   const derived = p?.derived.status ?? t.status;
   const docDiffers = p && p.derived.certainty !== "只有文档说法" && p.derived.status !== t.status;
   return (
@@ -36,6 +38,8 @@ function Row({ t, p, selected, onSelect }: { t: TaskRecord; p?: TaskProgress; se
         {p?.derived.certainty === "只有文档说法" ? <span className="muted">代码里没痕迹，照文档 · </span> : null}
         {files ? <span>{changedSignal?.text ?? `提到 ${files} 个文件`}</span> : <span className="muted">没提到具体文件，不能在图上高亮</span>}
         {p?.commits.length ? <span> · {p.commits.length} 个提交提到它</span> : null}
+        {testSignal ? <span className={(p?.testsFailed ?? 0) > 0 ? "red" : "green"}> · {testSignal.text}</span> : null}
+        {claim ? <span className={claim.value ? "green" : "amber"}> · {claim.value ? "验收声明核对一致" : "验收声明对不上"}</span> : null}
         {p?.active ? <span className="purple"> · Claude 正在改</span> : null}
       </div>
     </div>

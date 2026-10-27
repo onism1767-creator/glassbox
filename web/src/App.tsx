@@ -6,6 +6,7 @@ import { layoutGraph, type CanvasNode } from "./layout.ts";
 import { nodeTypes } from "./nodes.tsx";
 import { Panel, type Selection } from "./Panel.tsx";
 import { Tasks } from "./Tasks.tsx";
+import { testSummaryText } from "./TestsSection.tsx";
 import { WORDS, sourceShort, dirShort } from "./words.ts";
 import type { ActivityEvent } from "../../src/types.ts";
 
@@ -200,6 +201,10 @@ function Canvas({ ix, live, events, onToggleActivity, showActivity }: { ix: Snap
           {ix.s.history.latestStage ? <span>{WORDS.stage(ix.s.history.latestStage)}</span> : null}
           <span>{baseline ? WORDS.baseline(baseline.commitsSince, baseline.changes.length) : WORDS.noBaseline}</span>
           <span className={ix.s.violations.length ? "red" : "green"}>{WORDS.violations(ix.s.violations.length)}</span>
+          {(() => {
+            const t = testSummaryText(ix);
+            return <span className={t.bad ? "red" : ix.s.tests?.run ? "green" : ""}>{t.text}</span>;
+          })()}
           <button className="crumb" onClick={() => setShowTasks((v) => !v)}>{showTasks ? "收起任务栏" : `任务与进度${ix.s.tasks ? `（${ix.s.tasks.items.length}）` : ""}`}</button>
           <button className="crumb" onClick={onToggleActivity}>刚发生了什么 {events.length}（活动流）</button>
         </div>

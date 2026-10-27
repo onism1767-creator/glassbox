@@ -26,6 +26,8 @@ export interface Overlay {
   names?: { layers?: Record<string, string>; dirs?: Record<string, string> };
   /** 项目已有的任务列表文件；没有就用 .workbench/tasks/*.md。 */
   tasks?: { file: string; format?: "emoji-list" | "standard" };
+  /** 测试结果文件的位置（相对仓库）；缺省找 状态目录/test-results 与仓库根。 */
+  test_results?: { junit?: string; coverage?: string };
 }
 
 export interface WordsFromYaml {
@@ -77,6 +79,9 @@ export function readOverlay(root: string, override?: string): Overlay {
     stage_tag: typeof o.stage_tag === "string" ? o.stage_tag : undefined,
     names: o.names && typeof o.names === "object" ? { layers: stringMap(o.names.layers), dirs: stringMap(o.names.dirs) } : undefined,
     tasks: o.tasks && typeof o.tasks === "object" && typeof o.tasks.file === "string" ? { file: o.tasks.file, format: o.tasks.format === "standard" ? "standard" : "emoji-list" } : undefined,
+    test_results: o.test_results && typeof o.test_results === "object"
+      ? { ...(typeof o.test_results.junit === "string" ? { junit: o.test_results.junit } : {}), ...(typeof o.test_results.coverage === "string" ? { coverage: o.test_results.coverage } : {}) }
+      : undefined,
   };
 }
 

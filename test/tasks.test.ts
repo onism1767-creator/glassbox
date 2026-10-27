@@ -88,3 +88,9 @@ test("普通词编号不匹配提交；编号重复会被标出", () => {
   const inc = findInconsistencies(tasks, all, computeGauge(tasks, commits, all), now);
   assert.ok(inc.some((i) => i.kind === "编号重复" && i.taskId === "S10"));
 });
+
+test("emoji 清单：编号后面紧跟括号（验收说明）时，标题取括号后面的话，测试全绿数照样读到", () => {
+  const tasks = parseEmojiList("docs/任务列表.md", "- ✅ **S8.1**(2026-10-14;架构书附录「S8 实施记录」;329 测试全绿)文案与数字:人话计数句一律「本次 30 次回答里」;\n");
+  assert.equal(tasks[0]?.title, "文案与数字");
+  assert.equal(tasks[0]?.testsClaimed, 329);
+});

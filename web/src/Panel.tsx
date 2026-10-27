@@ -3,6 +3,7 @@ import type { GNode, GEdge, Level } from "./model.ts";
 import { SnapshotIndex, topDir, basename, COLORS } from "./model.ts";
 import { tierText, resolutionText, unresolvedKindText, changeWord, kindWord, dirLabel, layerBadge, statusWord, WORDS } from "./words.ts";
 import { fetchSource, type SourceExcerpt } from "./api.ts";
+import { TestsSection, FileTests } from "./TestsSection.tsx";
 import type { Evidence, FileEdge, CallEdge } from "../../src/types.ts";
 
 export type Selection = { kind: "node"; g: GNode } | { kind: "edge"; e: GEdge } | { kind: "task"; id: string };
@@ -112,6 +113,7 @@ export function Panel({ ix, selection, onNavigate }: { ix: SnapshotIndex; select
             ) : WORDS.noBaseline}
           </dd>
         </dl>
+        <TestsSection ix={ix} openEvidence={openEvidence} />
         <TechSection ix={ix} openEvidence={openEvidence} />
         <p className="hint">点一个方块看它是什么；点一条线看是哪几行代码把它们连起来的；双击方块往里看。</p>
         {open ? <SourceBlock open={open} /> : null}
@@ -209,6 +211,8 @@ export function Panel({ ix, selection, onNavigate }: { ix: SnapshotIndex; select
           <dd>{ins.length ? ins.map((e) => <div key={e.from}>← {e.from}，{e.evidence.length} 处</div>) : "没有"}</dd>
           <dt>越层调用（违规） <Tier t="T1" /></dt>
           <dd>{violations.length ? violations.map((v, i) => <div key={i} className="red">{v.message}<EvidenceLine ev={v.evidence} onOpen={openEvidence} /></div>) : "没有"}</dd>
+          <dt>测试与覆盖率</dt>
+          <FileTests ix={ix} path={ref.path} />
           <dt>里面的函数和类（符号） <Tier t="T0" /></dt>
           <dd>
             {symbols.length ? symbols.map((sym) => (
