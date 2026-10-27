@@ -23,7 +23,7 @@ const help = `glassbox · 画布是代码的函数
   glassbox baseline show [仓库]
   glassbox diff [仓库]                        基线到工作区的变更，按顶层目录投影
   glassbox snapshot [仓库] [--max-commits N]   全量快照：写 状态目录/snapshot.json 与 facts.sqlite
-  glassbox serve [仓库] [--port 4400]          启动画布服务（先 npm run web:build）：首次全量，之后监听文件增量重算并实时推送
+  glassbox serve [仓库] [--port 4400] [--no-auto-test]  启动画布服务（先 npm run web:build）：首次全量，之后监听文件增量重算并实时推送；改了 .py 自动只跑相关测试
   glassbox hooks install [仓库] [--port 4400]  把 Claude Code hooks 装进仓库的 .claude/settings.json（SessionStart 记基线、PostToolUse 记触碰）
   glassbox hooks print [--port 4400]          只打印 hooks 配置，自己合并
   glassbox test [仓库] [--no-coverage] [-- pytest参数]  用项目自己的解释器跑 pytest，junit（和 coverage）写进 状态目录/test-results
@@ -128,7 +128,7 @@ async function main(): Promise<void> {
       const root = resolveRoot(positional[0]);
       const state = stateDirFor(root);
       const { serve } = await import("./serve.ts");
-      await serve(root, { stateDir: state, ...indexOptions(), port: Number(option("port") ?? "4400") });
+      await serve(root, { stateDir: state, ...indexOptions(), ...(flag("no-auto-test") ? { autoTest: false } : {}), port: Number(option("port") ?? "4400") });
       return;
     }
     case "test": {
@@ -138,7 +138,9 @@ async function main(): Promise<void> {
       const root = resolveRoot(own[0]);
       const state = stateDirFor(root);
       const { runTests } = await import("./runtests.ts");
-      const r = await runTests(root, { stateDir: state, coverage: !flag("no-coverage"), extraArgs: extra, log: (l) => process.stdout.write(l + "\n") });
+      const { readOverlay } = await import("./config.ts");
+      const py = readOverlay(root, option("overlay")).test_results?.python;
+      const r = await runTests(root, { stateDir: state, ...(py ? { python: path.resolve(root, py) } : {}), coverage: !flag("no-coverage"), extraArgs: extra, log: (l) => process.stdout.write(l + "\n") });
       process.stdout.write(`\n退出码 ${r.exitCode}，${(r.elapsedMs / 1000).toFixed(1)} 秒\njunit：${r.junit}\n${r.coverage ? `coverage：${r.coverage}\n` : ""}${r.coverageSkipped ? `覆盖率：${r.coverageSkipped}\n` : ""}`);
       return;
     }

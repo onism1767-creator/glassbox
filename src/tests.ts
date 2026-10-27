@@ -18,15 +18,40 @@ export interface TestCase {
   message?: string;
 }
 
+/** 最近一次「只跑相关测试」的情况（结果已合并进 cases）。 */
+export interface PartialRun {
+  at: string;
+  changed: string[];
+  ran: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  elapsedMs: number;
+  granularity: "case" | "file";
+  items: { path: string; how: string; tier?: Tier }[];
+  skippedFiles: { path: string; why: string }[];
+}
+
 export interface TestRun {
   source: string;
   at: string;
+  /** 上一次全量跑的时间（有过部分合并时才有）。 */
+  fullAt?: string;
+  partial?: PartialRun;
   total: number;
   passed: number;
   failed: number;
   errors: number;
   skipped: number;
   cases: TestCase[];
+}
+
+/** 自动跑相关测试的开关状态，给画布看。 */
+export interface AutoTestState {
+  enabled: boolean;
+  python?: string;
+  why?: string;
+  running?: { since: string; changed: string[]; estimated: number; args: number };
 }
 
 export interface CoverageFile {
@@ -59,6 +84,7 @@ export interface FileTestStatus {
 
 export interface TestSnapshot {
   run?: TestRun;
+  auto?: AutoTestState;
   coverage?: Omit<CoverageData, "coveredBy">;
   fileStatus: Record<string, FileTestStatus>;
   /** 含测试用例的文件。 */
@@ -332,6 +358,19 @@ export function readTestResults(root: string, stateDir: string, known: Set<strin
   if (where.junit) {
     run = cached(where.junit, (text, at) => parseJunit(text, known, rel(where.junit!), at));
     if (!run) problems.push(`读不了 ${rel(where.junit)}`);
+  }
+  // 自动跑相关测试会把合并后的结果写成 results.json；它比 junit.xml 新就用它（全量跑一次又会把它盖过去）。
+  const merged = path.join(stateDir, "test-results", "results.json");
+  if (fs.existsSync(merged)) {
+    const newer = !where.junit || fs.statSync(merged).mtimeMs >= fs.statSync(where.junit).mtimeMs;
+    if (newer) {
+      const m = cached(merged, (text) => {
+        const parsed = JSON.parse(text) as { version?: number; run?: TestRun };
+        return parsed.version === 1 && parsed.run && Array.isArray(parsed.run.cases) ? parsed.run : undefined;
+      });
+      if (m) run = m;
+      else problems.push("results.json 格式不对，忽略了");
+    }
   }
   if (where.coverage) {
     try {

@@ -9,7 +9,7 @@ import { writeFacts } from "./store.ts";
 import { computeTech, type TechStack } from "./tech.ts";
 import { parseEmojiList, readStandardTasks, type TaskRecord } from "./tasks.ts";
 import { computeAllProgress, computeGauge, findInconsistencies, type TaskProgress, type StageGauge, type Inconsistency } from "./progress.ts";
-import { readTestResults, type TestSnapshot } from "./tests.ts";
+import { readTestResults, type TestSnapshot, type AutoTestState } from "./tests.ts";
 import type { FileRecord, ImportRecord, FileEdge, LayerRules, Violation, AllowedEdge, CommitRecord, Tier, SymbolRecord, CallEdge, UnresolvedCall, ActivityEvent, Touch } from "./types.ts";
 
 export interface DirModule {
@@ -137,6 +137,8 @@ export interface AssembleInput {
   standardTasksDir?: string;
   /** 状态目录，用来找 test-results。 */
   stateDir?: string;
+  /** 自动跑相关测试的开关状态（serve 时才有）。 */
+  autoTest?: AutoTestState;
 }
 
 function buildTasks(input: AssembleInput, tests: TestSnapshot | undefined): Snapshot["tasks"] | undefined {
@@ -168,6 +170,7 @@ export function assembleSnapshot(input: AssembleInput): Snapshot {
   const latest = stages[stages.length - 1];
   const layersTier: Tier = result.rules.provenance.find((p) => p.what === "layers")?.tier ?? "T2";
   const tests = input.stateDir ? readTestResults(root, input.stateDir, new Set(result.files.map((f) => f.path)), result.edges, result.overlay.test_results ?? {}) : undefined;
+  if (tests && input.autoTest) tests.auto = input.autoTest;
   const tasks = buildTasks(input, tests);
   return {
     schemaVersion: 1,

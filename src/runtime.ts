@@ -9,6 +9,8 @@ import { readBaseline, diffSinceBaseline, setBaseline, type DiffResult } from ".
 import { assembleSnapshot, readSource, writeSnapshotJson, type Snapshot } from "./snapshot.ts";
 import { writeFacts } from "./store.ts";
 import { ActivityLog, hookToEvents, type HookPayload } from "./activity.ts";
+import { AutoTester } from "./autotest.ts";
+import { guessPythonPath } from "./pyright.ts";
 import type { CommitRecord } from "./types.ts";
 
 export interface RuntimeOptions extends IndexOptions {
@@ -16,6 +18,8 @@ export interface RuntimeOptions extends IndexOptions {
   maxCommits?: number;
   /** 文件变化后等待多久再重算（合并连续改动）。 */
   debounceMs?: number;
+  /** 改了文件后自动只跑相关测试；缺省看 overlay 的 test_results.auto（缺省开）。 */
+  autoTest?: boolean;
   log?: (line: string) => void;
 }
 
@@ -32,6 +36,7 @@ export interface UpdateMessage {
 export class Runtime {
   readonly indexer: Indexer;
   readonly activity: ActivityLog;
+  readonly autoTester: AutoTester;
   snapshot: Snapshot | null = null;
   private commits: CommitRecord[] = [];
   private watcher: fs.FSWatcher | null = null;
@@ -53,12 +58,37 @@ export class Runtime {
     this.options = options;
     this.indexer = new Indexer(root, options);
     this.activity = new ActivityLog(options.stateDir);
-    this.excludes = readOverlay(root, options.overlayFile).exclude.map(globToRegExp);
+    const overlay = readOverlay(root, options.overlayFile);
+    this.excludes = overlay.exclude.map(globToRegExp);
     this.log = options.log ?? ((line) => process.stdout.write(line + "\n"));
+    const tr = overlay.test_results ?? {};
+    const python = tr.python ? path.resolve(root, tr.python) : guessPythonPath(root);
+    this.autoTester = new AutoTester(
+      root,
+      {
+        stateDir: options.stateDir,
+        ...(python ? { python } : {}),
+        enabled: options.autoTest ?? tr.auto ?? true,
+        ...(tr.debounce_ms ? { debounceMs: tr.debounce_ms } : {}),
+        log: (l) => this.log(`[pytest] ${l}`),
+      },
+      {
+        tests: () => this.snapshot?.tests,
+        known: () => new Set((this.snapshot?.files ?? []).map((f) => f.path)),
+        onEvent: (ev) => this.broadcast("activity", this.activity.record(ev)),
+        onState: (s) => this.broadcast("autotest", s),
+        onResults: () => {
+          this.pendingReason = "tests";
+          this.schedule(0);
+        },
+      },
+    );
   }
 
   /** 首次全量，然后开始监听。 */
   async start(): Promise<void> {
+    const auto = await this.autoTester.probe();
+    this.log(auto.enabled ? `自动跑相关测试：开（${auto.python}）` : `自动跑相关测试：关（${auto.why}）`);
     await this.cycle("initial");
     try {
       this.watcher = fs.watch(this.root, { recursive: true }, (_event, filename) => {
@@ -92,6 +122,7 @@ export class Runtime {
     this.watcher = null;
     this.resultsWatcher?.close();
     this.resultsWatcher = null;
+    this.autoTester.stop();
     if (this.timer) clearTimeout(this.timer);
     for (const c of this.clients) c.end();
     this.clients.clear();
@@ -176,10 +207,7 @@ export class Runtime {
     const elapsedMs = Date.now() - started;
     if (reason === "refine") {
       this.activity.record({ at: new Date().toISOString(), source: "system", kind: "refine", text: `细化：导入方的精确层已更新，${(elapsedMs / 1000).toFixed(1)} 秒` });
-    } else if (reason === "tests") {
-      const r = this.snapshot?.tests?.run;
-      this.activity.record({ at: new Date().toISOString(), source: "system", kind: "tests", text: r ? `测试结果更新：${r.passed} 通过、${r.failed + r.errors} 失败、${r.skipped} 跳过` : "测试结果文件变了" });
-    } else if (reason !== "initial") {
+    } else if (reason !== "initial" && reason !== "tests") {
       this.activity.record({
         at: new Date().toISOString(),
         source: gitChanged && !changed.length ? "git" : "watcher",
@@ -196,11 +224,26 @@ export class Runtime {
       activity: { events: this.activity.recent(200), touched: this.activity.touched() },
       standardTasksDir: path.join(this.options.stateDir, "tasks"),
       stateDir: this.options.stateDir,
+      autoTest: this.autoTester.state(),
     });
+    if (reason === "tests") {
+      // 结果文件变了（glassbox test 全量跑，或自动跑的相关测试合并进来了）。
+      const r = this.snapshot.tests?.run;
+      const p = r?.partial;
+      const fresh = p && Date.now() - Date.parse(p.at) < 60_000;
+      const text = !r
+        ? "测试结果文件变了"
+        : fresh
+          ? `自动跑了 ${p.ran} 个相关测试：通过 ${p.passed}、失败 ${p.failed}、跳过 ${p.skipped}，${(p.elapsedMs / 1000).toFixed(1)} 秒 → 总计 ${r.passed} 通过、${r.failed + r.errors} 失败、${r.skipped} 跳过`
+          : `测试结果更新：${r.passed} 通过、${r.failed + r.errors} 失败、${r.skipped} 跳过`;
+      this.broadcast("activity", this.activity.record({ at: new Date().toISOString(), source: "system", kind: "tests", text }));
+    }
     writeSnapshotJson(this.options.stateDir, this.snapshot);
     const message: UpdateMessage = { at: this.snapshot.generatedAt, reason, changed, elapsedMs, violations: result.violations.length, files: result.files.length };
     this.broadcast("update", message);
     this.log(`[${reason}] ${changed.length ? `${changed.length} 个文件` : "无文件变化"} · 违规 ${result.violations.length} · ${(elapsedMs / 1000).toFixed(1)} 秒`);
+    // 源码变了（监听到的或 hook 报的）→ 只跑和它们相关的测试。
+    if ((reason === "files" || reason === "hook") && result.changedFiles.length) this.autoTester.notice(result.changedFiles);
     const snapshot = this.snapshot;
     setImmediate(() => {
       try {
@@ -231,6 +274,8 @@ export class Runtime {
       this.pendingReason = "hook";
       this.schedule(50);
     }
+    // Claude 本轮结束：攒着的相关测试不等了，马上跑。
+    if (payload.hook_event_name === "Stop") this.autoTester.flushNow();
     return { accepted: true, detail: `${outcome.events.length} 个事件` };
   }
 

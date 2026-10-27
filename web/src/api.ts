@@ -1,5 +1,6 @@
 import type { Snapshot } from "../../src/snapshot.ts";
 import type { ActivityEvent } from "../../src/types.ts";
+import type { AutoTestState } from "../../src/tests.ts";
 
 export async function fetchSnapshot(): Promise<Snapshot> {
   const res = await fetch("/api/snapshot");
@@ -21,7 +22,7 @@ export async function fetchSource(path: string, line: number, context = 4): Prom
 
 export interface UpdateMessage {
   at: string;
-  reason: "initial" | "files" | "git" | "hook" | "manual";
+  reason: "initial" | "files" | "git" | "hook" | "manual" | "refine" | "tests";
   changed: string[];
   elapsedMs: number;
   violations: number;
@@ -31,6 +32,8 @@ export interface UpdateMessage {
 export interface StreamHandlers {
   onUpdate: (m: UpdateMessage) => void;
   onActivity: (e: ActivityEvent) => void;
+  /** 自动跑相关测试开始或结束。 */
+  onAutotest: (s: AutoTestState) => void;
   onState: (connected: boolean) => void;
 }
 
@@ -39,6 +42,7 @@ export function subscribe(handlers: StreamHandlers): () => void {
   const es = new EventSource("/api/stream");
   es.addEventListener("update", (e) => handlers.onUpdate(JSON.parse((e as MessageEvent<string>).data) as UpdateMessage));
   es.addEventListener("activity", (e) => handlers.onActivity(JSON.parse((e as MessageEvent<string>).data) as ActivityEvent));
+  es.addEventListener("autotest", (e) => handlers.onAutotest(JSON.parse((e as MessageEvent<string>).data) as AutoTestState));
   es.onopen = () => handlers.onState(true);
   es.onerror = () => handlers.onState(false);
   return () => es.close();

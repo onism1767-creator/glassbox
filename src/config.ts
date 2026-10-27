@@ -26,8 +26,11 @@ export interface Overlay {
   names?: { layers?: Record<string, string>; dirs?: Record<string, string> };
   /** 项目已有的任务列表文件；没有就用 .workbench/tasks/*.md。 */
   tasks?: { file: string; format?: "emoji-list" | "standard" };
-  /** 测试结果文件的位置（相对仓库）；缺省找 状态目录/test-results 与仓库根。 */
-  test_results?: { junit?: string; coverage?: string };
+  /**
+   * 测试结果文件的位置（相对仓库）；缺省找 状态目录/test-results 与仓库根。
+   * auto：改了文件后自动只跑相关测试（缺省开，前提是找得到带 pytest 的解释器）；python：解释器路径；debounce_ms：最后一次改动后等多久再跑。
+   */
+  test_results?: { junit?: string; coverage?: string; auto?: boolean; python?: string; debounce_ms?: number };
 }
 
 export interface WordsFromYaml {
@@ -80,7 +83,13 @@ export function readOverlay(root: string, override?: string): Overlay {
     names: o.names && typeof o.names === "object" ? { layers: stringMap(o.names.layers), dirs: stringMap(o.names.dirs) } : undefined,
     tasks: o.tasks && typeof o.tasks === "object" && typeof o.tasks.file === "string" ? { file: o.tasks.file, format: o.tasks.format === "standard" ? "standard" : "emoji-list" } : undefined,
     test_results: o.test_results && typeof o.test_results === "object"
-      ? { ...(typeof o.test_results.junit === "string" ? { junit: o.test_results.junit } : {}), ...(typeof o.test_results.coverage === "string" ? { coverage: o.test_results.coverage } : {}) }
+      ? {
+          ...(typeof o.test_results.junit === "string" ? { junit: o.test_results.junit } : {}),
+          ...(typeof o.test_results.coverage === "string" ? { coverage: o.test_results.coverage } : {}),
+          ...(typeof o.test_results.auto === "boolean" ? { auto: o.test_results.auto } : {}),
+          ...(typeof o.test_results.python === "string" ? { python: o.test_results.python } : {}),
+          ...(typeof o.test_results.debounce_ms === "number" ? { debounce_ms: o.test_results.debounce_ms } : {}),
+        }
       : undefined,
   };
 }

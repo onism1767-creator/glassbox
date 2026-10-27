@@ -9,6 +9,7 @@ import { Tasks } from "./Tasks.tsx";
 import { testSummaryText } from "./TestsSection.tsx";
 import { WORDS, sourceShort, dirShort } from "./words.ts";
 import type { ActivityEvent } from "../../src/types.ts";
+import type { AutoTestState } from "../../src/tests.ts";
 
 function levelKey(level: Level): string {
   return level.kind === "dirs" ? "dirs" : level.kind === "files" ? `files:${level.dir}` : `symbols:${level.file}`;
@@ -78,6 +79,8 @@ interface Live {
   connected: boolean;
   last?: UpdateMessage;
   refreshing: boolean;
+  /** 正在自动跑的相关测试。 */
+  testing?: AutoTestState["running"];
 }
 
 function Canvas({ ix, live, events, onToggleActivity, showActivity }: { ix: SnapshotIndex; live: Live; events: ActivityEvent[]; onToggleActivity: () => void; showActivity: boolean }) {
@@ -205,6 +208,11 @@ function Canvas({ ix, live, events, onToggleActivity, showActivity }: { ix: Snap
             const t = testSummaryText(ix);
             return <span className={t.bad ? "red" : ix.s.tests?.run ? "green" : ""}>{t.text}</span>;
           })()}
+          {live.testing ? (
+            <span className="purple" title={`改了 ${live.testing.changed.join("、")}`}>
+              正在跑{live.testing.estimated ? `约 ${live.testing.estimated} 个` : ""}相关测试（改了 {live.testing.changed.slice(0, 2).map(basename).join("、")}{live.testing.changed.length > 2 ? "…" : ""}）…
+            </span>
+          ) : null}
           <button className="crumb" onClick={() => setShowTasks((v) => !v)}>{showTasks ? "收起任务栏" : `任务与进度${ix.s.tasks ? `（${ix.s.tasks.items.length}）` : ""}`}</button>
           <button className="crumb" onClick={onToggleActivity}>刚发生了什么 {events.length}（活动流）</button>
         </div>
@@ -292,6 +300,7 @@ export function App() {
         load();
       },
       onActivity: (e) => setLiveEvents((list) => [e, ...list].slice(0, 200)),
+      onAutotest: (s) => setLive((l) => ({ ...l, testing: s.running })),
       onState: (connected) => setLive((l) => ({ ...l, connected })),
     });
     return () => {

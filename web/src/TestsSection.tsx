@@ -30,6 +30,7 @@ export function TestsSection({ ix, openEvidence }: { ix: SnapshotIndex; openEvid
   }
   const r = t.run;
   const fails = r.cases.filter((c) => c.status === "failed" || c.status === "error");
+  const p = r.partial;
   return (
     <div className="tests">
       <h3>测试结果（最近一次跑的）</h3>
@@ -37,6 +38,21 @@ export function TestsSection({ ix, openEvidence }: { ix: SnapshotIndex; openEvid
         <b className={fails.length ? "red" : "green"}>{r.passed} 通过、{r.failed + r.errors} 失败、{r.skipped} 跳过</b>，共 {r.total} 个，{r.at.replace("T", " ").slice(0, 19)} <Tier t="T0" />
         <span className="muted"> 来源 {r.source}</span>
       </p>
+      {p ? (
+        <p className="small">
+          <b className={p.failed ? "red" : "green"}>最近一次自动跑（{ago(p.at)}）</b>：改了 {p.changed.join("、")} → 只跑了 {p.ran} 个相关{p.granularity === "file" ? "测试文件里的" : ""}用例：通过 {p.passed}、失败 {p.failed}、跳过 {p.skipped}，{(p.elapsedMs / 1000).toFixed(1)} 秒
+          {p.items.map((i) => (
+            <span key={i.path} className="muted"> · {i.path}：{i.how}{i.tier ? <Tier t={i.tier} /> : null}</span>
+          ))}
+          {p.skippedFiles.length ? <span className="amber"> · 没跑：{p.skippedFiles.map((s) => `${s.path}（${s.why}）`).join("、")}</span> : null}
+          {r.fullAt ? <span className="muted"> · 其余用例的结果来自 {ago(r.fullAt)}的全量跑</span> : null}
+        </p>
+      ) : null}
+      {t.auto ? (
+        <p className="muted small">
+          {t.auto.enabled ? `改了 .py 文件会自动只跑相关测试（${t.auto.python ?? "python"}）` : `自动跑相关测试：关。${t.auto.why ?? ""}`}
+        </p>
+      ) : null}
       {t.coverage ? (
         <p className="small">
           代码被测试跑到的比例（覆盖率）{t.coverage.totalPercent}%{t.coverage.hasContexts ? "，而且知道每个测试跑过哪些文件" : "，但没记录每个测试跑过哪些文件（coverage 开 dynamic_context 才有）"} <Tier t="T0" />

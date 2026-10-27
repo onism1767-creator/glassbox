@@ -7,6 +7,8 @@ import { compactCoverage } from "./tests.ts";
 
 export interface RunTestsOptions {
   stateDir: string;
+  /** 解释器；缺省找仓库的 .venv。 */
+  python?: string;
   coverage?: boolean;
   extraArgs?: string[];
   log?: (line: string) => void;
@@ -22,7 +24,7 @@ export interface RunTestsResult {
   coverageSkipped?: string;
 }
 
-function run(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, log?: (l: string) => void, timeoutMs = 600_000): Promise<{ code: number; tail: string }> {
+export function runCommand(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, log?: (l: string) => void, timeoutMs = 600_000): Promise<{ code: number; tail: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     let tail = "";
@@ -48,9 +50,9 @@ function run(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, l
   });
 }
 
-async function moduleAvailable(python: string, mod: string, cwd: string): Promise<boolean> {
+export async function moduleAvailable(python: string, mod: string, cwd: string): Promise<boolean> {
   try {
-    const { code } = await run(python, ["-c", `import ${mod}`], cwd, process.env, undefined, 30_000);
+    const { code } = await runCommand(python, ["-c", `import ${mod}`], cwd, process.env, undefined, 30_000);
     return code === 0;
   } catch {
     return false;
@@ -59,7 +61,7 @@ async function moduleAvailable(python: string, mod: string, cwd: string): Promis
 
 export async function runTests(root: string, options: RunTestsOptions): Promise<RunTestsResult> {
   const started = Date.now();
-  const python = guessPythonPath(root) ?? "python";
+  const python = options.python ?? guessPythonPath(root) ?? "python";
   const dir = path.join(options.stateDir, "test-results");
   fs.mkdirSync(dir, { recursive: true });
   const junit = path.join(dir, "junit.xml");
@@ -77,11 +79,11 @@ export async function runTests(root: string, options: RunTestsOptions): Promise<
     fs.writeFileSync(rc, "[run]\ndynamic_context = test_function\nrelative_files = True\n[json]\nshow_contexts = True\n", "utf8");
     const covEnv = { ...env, COVERAGE_FILE: path.join(dir, ".coverage"), COVERAGE_RCFILE: rc };
     options.log?.(`跑测试（带覆盖率）：${python} -m coverage run -m pytest ${pytestArgs.join(" ")}`);
-    const r = await run(python, ["-m", "coverage", "run", "-m", "pytest", ...pytestArgs], root, covEnv, options.log);
+    const r = await runCommand(python, ["-m", "coverage", "run", "-m", "pytest", ...pytestArgs], root, covEnv, options.log);
     exitCode = r.code;
     tail = r.tail;
     const raw = path.join(dir, "coverage-raw.json");
-    const j = await run(python, ["-m", "coverage", "json", "-o", raw, "--show-contexts", "-q"], root, covEnv, options.log, 120_000);
+    const j = await runCommand(python, ["-m", "coverage", "json", "-o", raw, "--show-contexts", "-q"], root, covEnv, options.log, 120_000);
     if (j.code !== 0) coverageSkipped = `coverage json 失败：${j.tail.slice(-300)}`;
     else {
       // 带上下文的原始文件动辄几十 MB，压成只含摘要和「跑过它的测试」的小文件，原始文件删掉。
@@ -94,7 +96,7 @@ export async function runTests(root: string, options: RunTestsOptions): Promise<
   } else {
     if (wantCoverage) coverageSkipped = `这个解释器里没有 coverage，只写了 junit；想要覆盖率和「每个测试跑过哪些文件」，在项目的环境里 pip install coverage`;
     options.log?.(`跑测试：${python} -m pytest ${pytestArgs.join(" ")}`);
-    const r = await run(python, ["-m", "pytest", ...pytestArgs], root, env, options.log);
+    const r = await runCommand(python, ["-m", "pytest", ...pytestArgs], root, env, options.log);
     exitCode = r.code;
     tail = r.tail;
   }
