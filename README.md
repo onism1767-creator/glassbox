@@ -18,7 +18,7 @@
 
 ## 状态
 
-阶段 6 完成：任务与进度。索引器读文件、解析 import、从项目自己的守卫测试读分层规则并检验违规、提取函数与类与方法、解析调用边（语法层 + pyright 精确层）、读 git 历史与阶段标签、算会话基线差异、读依赖清单对照实际 import；画布用 React Flow 加 ELK 画成目录、文件、符号三级，泳道按层，所有文字都是"人话（专业术语）"，违规边红、白名单边标注、基线差异着色，点方块或点线看证据与真相等级；左侧任务栏读项目已有的任务列表当计划清单，做没做完以代码为准，点任务在图上高亮它的文件；测试结果（junit 与 coverage）进文件、目录和任务，"N 测试全绿"的声明和实测对照；改了一个 .py 文件，几秒后只跑和它相关的测试（覆盖率上下文知道哪些测试跑过它），结果合并进画布；服务监听仓库，改一个文件不到一秒画布就变，Claude Code 的 hooks 把会话开始、编辑、命令送进活动流并自动记基线。旅程、AI 自动标注还没有。
+阶段 7 完成：AI 标注。人或 AI 给目录、文件、函数或类写人话名字和一句话职责，每条绑定到画布上真实存在的节点并记下内容哈希，节点变了自动过时；写入逐条校验（节点存在、依据在节点里、哈希是现在的），命令行、HTTP、文件三个入口，和 AI 工具无关，Claude Code 有现成 skill。索引器读文件、解析 import、从项目自己的守卫测试读分层规则并检验违规、提取函数与类与方法、解析调用边（语法层 + pyright 精确层）、读 git 历史与阶段标签、算会话基线差异、读依赖清单对照实际 import；画布用 React Flow 加 ELK 画成目录、文件、符号三级，泳道按层，所有文字都是"人话（专业术语）"，违规边红、白名单边标注、基线差异着色，点方块或点线看证据与真相等级；左侧任务栏读项目已有的任务列表当计划清单，做没做完以代码为准，点任务在图上高亮它的文件；测试结果（junit 与 coverage）进文件、目录和任务，"N 测试全绿"的声明和实测对照；改了一个 .py 文件，几秒后只跑和它相关的测试（覆盖率上下文知道哪些测试跑过它），结果合并进画布；服务监听仓库，改一个文件不到一秒画布就变，Claude Code 的 hooks 把会话开始、编辑、命令送进活动流并自动记基线。旅程、AI 自动标注还没有。
 
 ```bash
 npm install
@@ -27,6 +27,9 @@ node src/cli.ts init <仓库>                      # 写 .workbench/overlay.yaml
 node src/cli.ts serve <仓库>                     # 打开 http://127.0.0.1:4400，监听中；改了 .py 自动只跑相关测试（--no-auto-test 关）
 node src/cli.ts hooks install <仓库>             # 把 Claude Code hooks 装进仓库的 .claude/settings.json
 node src/cli.ts test <仓库>                      # 用项目自己的解释器跑 pytest（有 coverage 就带覆盖率），结果进画布
+node src/cli.ts annotate todo <仓库>             # 还没标或已过时的节点，带哈希和上下文，给 AI 写人话标注用
+node src/cli.ts annotate set <仓库> --file 批.json   # 交一批标注，逐条校验，收下的立刻进画布
+node src/cli.ts annotate skill <仓库>            # 把"写标注"的 skill 装进仓库的 .claude/skills/
 node src/cli.ts check <仓库>
 node src/cli.ts calls <函数或类名> <仓库>
 node src/cli.ts snapshot <仓库>
@@ -48,6 +51,8 @@ node src/cli.ts snapshot <仓库>
 12. [阶段 6 记录](docs/阶段6-任务/阶段6-记录.md)：人话文案、点线看证据、技术栈面板、左侧任务栏与阶段对照
 13. [测试接入记录](docs/测试接入/记录.md)：junit 与 coverage 进文件、目录和任务，「N 测试全绿」声明与实测对照，GEO 实测 403 通过
 14. [自动跑相关测试](docs/测试接入/自动跑相关测试.md)：改了文件只跑相关测试，结果合并进画布，实测 5.3 秒
+15. [标注协议](docs/标注协议.md)：人或任何 AI 给画布写人话名字的协议，节点、哈希、三个入口、校验规则
+16. [阶段 7 记录](docs/阶段7-标注/阶段7-记录.md)：AI 标注，GEO 实测 16 条收下 3 条退回，代码变了自动过时
 
 技术决定：TypeScript on Node 24；tree-sitter 做语法结构；符号级调用图用 tree-sitter 语法层加 pyright 语言服务器精确层（原定的 scip-python 在 Windows 启动即崩，见阶段 3 记录）；node:sqlite 做事实库；React Flow 加 ELK 做画布；任务是仓库内 Markdown 文件；Claude Code hooks 做实时事件，协议本身与 AI 工具无关。
 

@@ -25,7 +25,7 @@ export interface RuntimeOptions extends IndexOptions {
 
 export interface UpdateMessage {
   at: string;
-  reason: "initial" | "files" | "git" | "hook" | "manual" | "refine" | "tests";
+  reason: "initial" | "files" | "git" | "hook" | "manual" | "refine" | "tests" | "annotations";
   changed: string[];
   elapsedMs: number;
   violations: number;
@@ -49,6 +49,11 @@ export class Runtime {
   private gitChanged = false;
   /** 测试结果文件变了（glassbox test 全量跑完，或自动跑合并出了 results.json）。 */
   private testsChanged = false;
+  /** 标注文件变了（AI 交了一批，或人手改了 annotations.yaml）。 */
+  private annotationsChanged = false;
+  /** 服务自己刚写完 annotations.yaml 的时间：紧随其后的监听事件是同一件事。 */
+  private annotationsWrittenAt = 0;
+  private annotationsWatcher: fs.FSWatcher | null = null;
   /** 自动跑刚写完 results.json 的时间：直接通知已经安排了重算，紧随其后的监听事件是同一件事，不再多算一轮。 */
   private resultsWrittenAt = 0;
   private pendingReason: UpdateMessage["reason"] = "files";
@@ -127,6 +132,18 @@ export class Runtime {
       } catch {
         /* 盯不住也不影响 */
       }
+      // 状态目录在仓库外时，标注文件也要单独盯；只认 annotations.yaml，状态目录里别的文件（快照、事件日志）每轮都在写。
+      try {
+        this.annotationsWatcher = fs.watch(this.options.stateDir, (_event, filename) => {
+          if (filename === "annotations.yaml" && Date.now() - this.annotationsWrittenAt >= 3000) {
+            this.annotationsChanged = true;
+            this.schedule(this.options.debounceMs ?? 250);
+          }
+        });
+        this.annotationsWatcher.on("error", () => undefined);
+      } catch {
+        /* 同上 */
+      }
     }
   }
 
@@ -135,6 +152,8 @@ export class Runtime {
     this.watcher = null;
     this.resultsWatcher?.close();
     this.resultsWatcher = null;
+    this.annotationsWatcher?.close();
+    this.annotationsWatcher = null;
     this.autoTester.stop();
     if (this.timer) clearTimeout(this.timer);
     for (const c of this.clients) c.end();
@@ -143,7 +162,7 @@ export class Runtime {
   }
 
   /** 把一个文件系统事件归类：git 元数据、源码、测试结果、忽略。 */
-  classify(rel: string): "git" | "file" | "tests" | "ignore" {
+  classify(rel: string): "git" | "file" | "tests" | "ignore" | "annotations" {
     if (rel === ".git" || rel.startsWith(".git/")) {
       const inner = rel.slice(5);
       // 不监听 .git/index：git status 本身会刷新它，会把自己触发成死循环；提交看 HEAD、refs、logs/HEAD 就够。
@@ -152,6 +171,8 @@ export class Runtime {
     }
     // 标准任务目录在 .workbench 里，索引器不读它，但它变了要重算任务。
     if (rel.startsWith(".workbench/tasks/")) return "file";
+    // 人话标注：索引器不读，但变了要重算状态。
+    if (rel === ".workbench/annotations.yaml") return "annotations";
     // 测试结果：索引器不读，但变了要重读；自动跑过程中的 partial/junit.xml 和 .tmp 不算，不然每次自动跑都多一轮「重算 1 个文件」。
     if (rel.startsWith(".workbench/test-results/")) return TEST_RESULT_FILE.test(rel) ? "tests" : "ignore";
     if (isExcluded(rel, this.excludes, this.keepDotDirs)) return "ignore";
@@ -162,8 +183,10 @@ export class Runtime {
     const kind = this.classify(rel);
     if (kind === "ignore") return;
     if (kind === "tests" && this.ownResultsEvent(rel)) return;
+    if (kind === "annotations" && Date.now() - this.annotationsWrittenAt < 3000) return;
     if (kind === "git") this.gitChanged = true;
     else if (kind === "tests") this.testsChanged = true;
+    else if (kind === "annotations") this.annotationsChanged = true;
     else this.pending.add(rel);
     this.schedule(this.options.debounceMs ?? 250);
   }
@@ -192,8 +215,8 @@ export class Runtime {
       return;
     }
     // 只有测试结果变了、没有别的变化，这一轮才叫 tests；否则按文件 / hook 算，测试结果的变化在 cycle 里另记一条。
-    const onlyTests = this.pendingReason === "files" && this.testsChanged && !this.pending.size && !this.gitChanged;
-    const reason = onlyTests ? "tests" : this.pendingReason;
+    const quiet = this.pendingReason === "files" && !this.pending.size && !this.gitChanged;
+    const reason = quiet && this.testsChanged ? "tests" : quiet && this.annotationsChanged ? "annotations" : this.pendingReason;
     this.pendingReason = "files";
     this.running = this.cycle(reason).catch((error: unknown) => {
       this.log(`重算失败：${error instanceof Error ? error.message : String(error)}`);
@@ -220,6 +243,8 @@ export class Runtime {
     this.gitChanged = false;
     const testsChanged = this.testsChanged;
     this.testsChanged = false;
+    const annotationsChanged = this.annotationsChanged;
+    this.annotationsChanged = false;
     const result: IndexResult = await this.indexer.run({ deferImporters: reason !== "initial" && reason !== "refine" });
     if (gitChanged || !this.commits.length) {
       this.commits = await readHistory(this.root, { stageTag: result.overlay.stage_tag, ...(this.options.maxCommits ? { max: this.options.maxCommits } : {}) });
@@ -238,7 +263,7 @@ export class Runtime {
     const elapsedMs = Date.now() - started;
     if (reason === "refine") {
       this.activity.record({ at: new Date().toISOString(), source: "system", kind: "refine", text: `细化：导入方的精确层已更新，${(elapsedMs / 1000).toFixed(1)} 秒` });
-    } else if (reason !== "initial" && reason !== "tests") {
+    } else if (reason !== "initial" && reason !== "tests" && reason !== "annotations") {
       this.activity.record({
         at: new Date().toISOString(),
         source: gitChanged && !changed.length ? "git" : "watcher",
@@ -257,6 +282,11 @@ export class Runtime {
       stateDir: this.options.stateDir,
       autoTest: this.autoTester.state(),
     });
+    if (annotationsChanged) {
+      const a = this.snapshot.annotations;
+      const text = a ? `人话标注更新：${a.summary.total} 条，${a.summary.stale} 条过时、${a.summary.orphan} 条没对象；还有 ${a.summary.todoDirs} 个目录、${a.summary.todoFiles} 个文件没标` : "标注文件变了";
+      this.broadcast("activity", this.activity.record({ at: new Date().toISOString(), source: "system", kind: "annotations", text }));
+    }
     if (testsChanged) {
       // 结果文件变了（glassbox test 全量跑，或自动跑的相关测试合并进来了）。
       const r = this.snapshot.tests?.run;
@@ -283,6 +313,13 @@ export class Runtime {
         this.log(`写 sqlite 失败：${error instanceof Error ? error.message : String(error)}`);
       }
     });
+  }
+
+  /** 服务自己刚把一批标注写进 annotations.yaml：马上重算一轮，紧随其后的监听事件不再多算。 */
+  annotationsWritten(): void {
+    this.annotationsWrittenAt = Date.now();
+    this.annotationsChanged = true;
+    this.schedule(0);
   }
 
   /** 处理 Claude Code hook。 */

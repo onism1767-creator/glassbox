@@ -1,5 +1,6 @@
 import type { Snapshot } from "../../src/snapshot.ts";
 import type { TestCase } from "../../src/tests.ts";
+import type { AnnotationView } from "../../src/annotations.ts";
 import type { FileRecord, SymbolRecord, CallEdge, FileEdge, Violation, AllowedEdge, ChangeRecord, UnresolvedCall, Touch } from "../../src/types.ts";
 import { WORDS, dirLabel, dirShort, layerLabel, layerBadge, kindWord, changeWord, type Names, EMPTY_NAMES } from "./words.ts";
 
@@ -103,6 +104,8 @@ export class SnapshotIndex {
   readonly topDirs: string[];
   readonly touched: Record<string, Touch>;
   readonly names: Names;
+  /** 人话标注按节点 id 查（dir:x、file:x、sym:x）。 */
+  readonly annotations = new Map<string, AnnotationView>();
   readonly s: Snapshot;
   /** 测试用例按 id 查，懒建一次。 */
   private testCaseById: Map<string, TestCase> | null = null;
@@ -111,6 +114,7 @@ export class SnapshotIndex {
     this.s = s;
     this.touched = s.activity?.touched ?? {};
     this.names = s.names ? { layers: s.names.layers, dirs: s.names.dirs } : EMPTY_NAMES;
+    for (const a of s.annotations?.items ?? []) this.annotations.set(a.node, a);
     for (const f of s.files) {
       this.files.set(f.path, f);
       const top = topDir(f.path);
@@ -204,6 +208,19 @@ export class SnapshotIndex {
   }
 
   /** 一组文件的测试徽章：有失败就红；否则给覆盖率或相关测试数。同一个测试跑过几个文件只算一次。 */
+  /** 节点的人话标签：有新鲜标注就「名字（术语）」，否则用原来的。过时的标注不上标签，只在面板里灰显。 */
+  labelFor(node: string, term: string, fallback: string): string {
+    const a = this.annotations.get(node);
+    return a && a.status === "fresh" ? `${a.name}（${term}）` : fallback;
+  }
+
+  annotationBadge(node: string): GNode["badges"][number] | undefined {
+    const a = this.annotations.get(node);
+    if (!a) return undefined;
+    if (a.status === "stale") return { text: `标注过时（代码变了）：${a.name}`, tone: "gray" };
+    return undefined;
+  }
+
   testBadge(paths: string[]): GNode["badges"][number] | undefined {
     const t = this.s.tests;
     if (!t?.run) return undefined;
@@ -265,10 +282,12 @@ function dirGraph(ix: SnapshotIndex): Graph {
     if (touchedHere) badges.push({ text: WORDS.touched(touchedHere), tone: "purple" });
     const tb = ix.testBadge(files.map((f) => f.path));
     if (tb) badges.push(tb);
+    const ab = ix.annotationBadge(`dir:${dir}`);
+    if (ab) badges.push(ab);
     nodes.push({
       id: `dir:${dir}`,
       type: "dir",
-      label: dirLabel(dir, ix.names),
+      label: ix.labelFor(`dir:${dir}`, dir === "." ? "根目录" : dir, dirLabel(dir, ix.names)),
       sub: `${files.length} 个文件`,
       partition,
       ...SIZE.dir,
@@ -309,11 +328,13 @@ function fileGraph(ix: SnapshotIndex, dir: string): Graph {
     if (touch) badges.push({ text: `Claude 刚改过 · ${ago(touch.at)}${touch.session ? ` · 会话 ${touch.session}` : ""}`, tone: "purple" });
     const tb = ix.testBadge([f.path]);
     if (tb) badges.push(tb);
+    const ab = ix.annotationBadge(`file:${f.path}`);
+    if (ab) badges.push(ab);
     if (symbols) badges.push({ text: WORDS.symbols(symbols), tone: "gray" });
     nodes.push({
       id: `file:${f.path}`,
       type: "file",
-      label: basename(f.path),
+      label: ix.labelFor(`file:${f.path}`, basename(f.path), basename(f.path)),
       sub: f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) + "/" : f.language,
       partition: 1,
       ...SIZE.file,
@@ -389,7 +410,9 @@ function symbolGraph(ix: SnapshotIndex, file: string): Graph {
     const badges: GNode["badges"] = [{ text: kindWord(s.kind), tone: s.kind === "class" ? "purple" : "gray" }];
     if (callers) badges.push({ text: WORDS.callers(callers), tone: "blue" });
     if (unresolved) badges.push({ text: WORDS.unresolved(unresolved), tone: "amber" });
-    nodes.push({ id: `sym:${s.id}`, type: "symbol", label: s.qualified, sub: `第 ${s.startLine}–${s.endLine} 行${callees ? ` · 调用了别人 ${callees} 次` : ""}`, partition: 1, ...SIZE.symbol, badges, ref: { kind: "symbol", id: s.id }, files: [file] });
+    const ab = ix.annotationBadge(`sym:${s.id}`);
+    if (ab) badges.push(ab);
+    nodes.push({ id: `sym:${s.id}`, type: "symbol", label: ix.labelFor(`sym:${s.id}`, s.qualified, s.qualified), sub: `第 ${s.startLine}–${s.endLine} 行${callees ? ` · 调用了别人 ${callees} 次` : ""}`, partition: 1, ...SIZE.symbol, badges, ref: { kind: "symbol", id: s.id }, files: [file] });
   }
   const edges = new Map<string, GEdge>();
   const portalIn = new Map<string, number>();

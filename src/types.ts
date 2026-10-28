@@ -54,6 +54,8 @@ export interface SymbolRecord {
   endLine: number;
   exported?: boolean;
   isDefault?: boolean;
+  /** 这个函数或类自己源码的哈希（标注绑定用）。 */
+  hash?: string;
 }
 
 export type CallResolution = "same-file" | "import" | "self" | "pyright";

@@ -51,6 +51,10 @@ export interface IndexResult {
   taskSource?: { file: string; format: "emoji-list" | "standard"; text: string };
 }
 
+function symbolHash(lines: string[], startLine: number, endLine: number): string {
+  return createHash("sha1").update(lines.slice(startLine - 1, endLine).join("\n")).digest("hex");
+}
+
 interface CachedFile {
   record: FileRecord;
   mtimeMs: number;
@@ -123,6 +127,9 @@ export class Indexer {
         try {
           entry.raw = await extractRawImports(rel, content, grammar);
           entry.symbols = await extractFileSymbols(rel, content, grammar);
+          // 每个函数或类自己的源码哈希：标注绑定到它，它变了标注才过时。
+          const lines = content.split("\n");
+          for (const s of entry.symbols) s.hash = symbolHash(lines, s.startLine, s.endLine);
           entry.sites = await extractCallSites(rel, content, grammar);
         } catch {
           entry.raw = [];

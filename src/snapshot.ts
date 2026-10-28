@@ -10,6 +10,7 @@ import { computeTech, type TechStack } from "./tech.ts";
 import { parseEmojiList, readStandardTasks, type TaskRecord } from "./tasks.ts";
 import { computeAllProgress, computeGauge, findInconsistencies, type TaskProgress, type StageGauge, type Inconsistency } from "./progress.ts";
 import { readTestResults, type TestSnapshot, type AutoTestState } from "./tests.ts";
+import { annotationSnapshot, type AnnotationSnapshot } from "./annotations.ts";
 import type { FileRecord, ImportRecord, FileEdge, LayerRules, Violation, AllowedEdge, CommitRecord, Tier, SymbolRecord, CallEdge, UnresolvedCall, ActivityEvent, Touch } from "./types.ts";
 
 export interface DirModule {
@@ -62,6 +63,8 @@ export interface Snapshot {
   tech: TechStack;
   /** 测试结果：junit 与 coverage。 */
   tests?: TestSnapshot;
+  /** 人话标注：绑定到节点的名字和职责，T2 声明，节点变了自动过时。 */
+  annotations?: AnnotationSnapshot;
   /** 任务：声明层（任务文件）+ 证据层（进度信号、阶段对照、不一致）。 */
   tasks?: {
     source: { file: string; format: "emoji-list" | "standard"; tier: Tier; readAt?: string };
@@ -171,6 +174,12 @@ export function assembleSnapshot(input: AssembleInput): Snapshot {
   const layersTier: Tier = result.rules.provenance.find((p) => p.what === "layers")?.tier ?? "T2";
   const tests = input.stateDir ? readTestResults(root, input.stateDir, new Set(result.files.map((f) => f.path)), result.edges, result.overlay.test_results ?? {}) : undefined;
   if (tests && input.autoTest) tests.auto = input.autoTest;
+  const annotations = input.stateDir
+    ? annotationSnapshot(input.stateDir, { files: result.files, symbols: result.symbols, edges: result.edges, layers: result.rules.layers }, (p) => {
+        const r = path.relative(root, p);
+        return r && !r.startsWith("..") && !path.isAbsolute(r) ? r.split(path.sep).join("/") : `状态目录/${path.basename(p)}`;
+      })
+    : undefined;
   const tasks = buildTasks(input, tests);
   return {
     schemaVersion: 1,
@@ -206,6 +215,7 @@ export function assembleSnapshot(input: AssembleInput): Snapshot {
     names: { layers: result.overlay.names?.layers ?? {}, dirs: result.overlay.names?.dirs ?? {}, tier: "T2" },
     tech: computeTech(result.imports, result.manifests),
     ...(tests ? { tests } : {}),
+    ...(annotations ? { annotations } : {}),
     ...(tasks ? { tasks } : {}),
     changedFiles: result.changedFiles,
     elapsedMs: result.elapsedMs,

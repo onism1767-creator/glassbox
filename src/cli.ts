@@ -26,6 +26,12 @@ const help = `glassbox · 画布是代码的函数
   glassbox serve [仓库] [--port 4400] [--no-auto-test]  启动画布服务（先 npm run web:build）：首次全量，之后监听文件增量重算并实时推送；改了 .py 自动只跑相关测试
   glassbox hooks install [仓库] [--port 4400]  把 Claude Code hooks 装进仓库的 .claude/settings.json（SessionStart 记基线、PostToolUse 记触碰）
   glassbox hooks print [--port 4400]          只打印 hooks 配置，自己合并
+  glassbox annotate todo [仓库] [--kind dir|file|symbol] [--dir 目录] [--in 文件] [--limit N] [--json]
+                                             还没标或已过时的节点，带哈希和上下文，给 AI 写人话标注用
+  glassbox annotate set [仓库] --file 批.json [--author 名字]   交一批标注（逐条校验：节点存在、依据在节点里、哈希是现在的）
+  glassbox annotate show [仓库] [--stale] [--json]             现有标注与状态
+  glassbox annotate skill [仓库]              把"写标注"的 skill 装进仓库的 .claude/skills/
+                                             （服务开着就走 http://127.0.0.1:4400，--port 改端口，--no-server 强制本地索引）
   glassbox test [仓库] [--no-coverage] [-- pytest参数]  用项目自己的解释器跑 pytest，junit（和 coverage）写进 状态目录/test-results
   glassbox help                              显示本帮助
 
@@ -142,6 +148,31 @@ async function main(): Promise<void> {
       const py = readOverlay(root, option("overlay")).test_results?.python;
       const r = await runTests(root, { stateDir: state, ...(py ? { python: path.resolve(root, py) } : {}), coverage: !flag("no-coverage"), extraArgs: extra, log: (l) => process.stdout.write(l + "\n") });
       process.stdout.write(`\n退出码 ${r.exitCode}，${(r.elapsedMs / 1000).toFixed(1)} 秒\njunit：${r.junit}\n${r.coverage ? `coverage：${r.coverage}\n` : ""}${r.coverageConfig ? `覆盖率配置：${r.coverageConfig}\n` : ""}${r.coverageSkipped ? `覆盖率：${r.coverageSkipped}\n` : ""}`);
+      return;
+    }
+    case "annotate": {
+      const sub = positional[0] ?? "";
+      const root = resolveRoot(positional[1]);
+      const state = stateDirFor(root);
+      const { annotate } = await import("./annotate-cli.ts");
+      const kind = option("kind");
+      await annotate(sub, root, {
+        stateDir: state,
+        ...indexOptions(),
+        port: Number(option("port") ?? "4400"),
+        noServer: flag("no-server"),
+        json: flag("json"),
+        todo: {
+          ...(kind === "dir" || kind === "file" || kind === "symbol" ? { kind } : {}),
+          ...(option("dir") ? { dir: option("dir")! } : {}),
+          ...(option("in") ? { file: option("in")! } : {}),
+          ...(option("limit") ? { limit: Number(option("limit")) || undefined } : {}),
+        },
+        ...(option("file") ? { input: path.resolve(option("file")!) } : {}),
+        author: option("author") ?? "ai",
+        staleOnly: flag("stale"),
+        out: (t) => process.stdout.write(t),
+      });
       return;
     }
     case "hooks": {

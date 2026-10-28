@@ -22,7 +22,7 @@ export async function fetchSource(path: string, line: number, context = 4): Prom
 
 export interface UpdateMessage {
   at: string;
-  reason: "initial" | "files" | "git" | "hook" | "manual" | "refine" | "tests";
+  reason: "initial" | "files" | "git" | "hook" | "manual" | "refine" | "tests" | "annotations";
   changed: string[];
   elapsedMs: number;
   violations: number;

@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Runtime, type RuntimeOptions } from "./runtime.ts";
 import type { HookPayload } from "./activity.ts";
+import { annotationSnapshot, annotationTodo, applyAnnotations, readAnnotations, lineCounter, type NodeWorld, type TodoOptions } from "./annotations.ts";
 
 const webDist = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "web", "dist");
 
@@ -62,7 +63,44 @@ export async function serve(root: string, options: ServeOptions): Promise<{ serv
       const result = await runtime.hook(payload);
       return json(res, 200, result);
     }
+    const world = (): NodeWorld | null => {
+      const s = runtime.snapshot;
+      return s ? { files: s.files, symbols: s.symbols, edges: s.edges, layers: s.rules.layers } : null;
+    };
+    // 标注协议的 HTTP 入口：任何 AI 工具都能用。GET 看现状和待办，POST 交一批（逐条校验，收下的立刻进画布）。
+    if (url.pathname === "/api/annotations" && req.method === "POST") {
+      const w = world();
+      if (!w) return json(res, 503, { error: "快照尚未生成" });
+      let body: unknown;
+      try {
+        body = JSON.parse((await readBody(req, 4 * 1024 * 1024)) || "[]");
+      } catch {
+        return json(res, 400, { error: "不是 JSON" });
+      }
+      const author = body && typeof body === "object" && typeof (body as { author?: unknown }).author === "string" ? (body as { author: string }).author : "ai";
+      const result = applyAnnotations(options.stateDir, w, body, { lineCount: lineCounter(root), author, now: new Date().toISOString() });
+      if (result.accepted.length) runtime.annotationsWritten();
+      return json(res, 200, { root, accepted: result.accepted.map((a) => a.node), rejected: result.rejected, total: result.total, file: result.file });
+    }
     if (req.method !== "GET") return json(res, 405, { error: "只支持 GET" });
+    if (url.pathname === "/api/annotations") {
+      // 现算，不用快照里的：刚 POST 完那一轮重算可能还没跑完，命令行紧接着 show 也要看到最新的。
+      const w = world();
+      if (!w) return json(res, 503, { error: "快照尚未生成" });
+      return json(res, 200, { root, ...annotationSnapshot(options.stateDir, w, (p) => runtime.snapshot?.annotations?.source ?? p) });
+    }
+    if (url.pathname === "/api/annotations/todo") {
+      const w = world();
+      if (!w) return json(res, 503, { error: "快照尚未生成" });
+      const kind = url.searchParams.get("kind");
+      const opts: TodoOptions = {
+        ...(kind === "dir" || kind === "file" || kind === "symbol" ? { kind } : {}),
+        ...(url.searchParams.get("dir") ? { dir: url.searchParams.get("dir")! } : {}),
+        ...(url.searchParams.get("file") ? { file: url.searchParams.get("file")! } : {}),
+        ...(url.searchParams.get("limit") ? { limit: Number(url.searchParams.get("limit")) || undefined } : {}),
+      };
+      return json(res, 200, { root, items: annotationTodo(w, readAnnotations(options.stateDir).items, opts) });
+    }
     if (url.pathname === "/api/snapshot") {
       if (!runtime.snapshot) return json(res, 503, { error: "快照尚未生成" });
       res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });

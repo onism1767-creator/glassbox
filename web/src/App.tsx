@@ -7,6 +7,7 @@ import { nodeTypes } from "./nodes.tsx";
 import { Panel, type Selection } from "./Panel.tsx";
 import { Tasks } from "./Tasks.tsx";
 import { testSummaryText } from "./TestsSection.tsx";
+import { annotationSummaryText } from "./Annotations.tsx";
 import { WORDS, sourceShort, dirShort } from "./words.ts";
 import type { ActivityEvent } from "../../src/types.ts";
 import type { AutoTestState } from "../../src/tests.ts";
@@ -207,6 +208,10 @@ function Canvas({ ix, live, events, onToggleActivity, showActivity }: { ix: Snap
           {(() => {
             const t = testSummaryText(ix);
             return <span className={t.bad ? "red" : ix.s.tests?.run ? "green" : ""}>{t.text}</span>;
+          })()}
+          {(() => {
+            const a = annotationSummaryText(ix);
+            return a ? <span className={a.tone} title="人话名字由人或 AI 写，绑定到节点，代码变了自动标过时">{a.text}</span> : null;
           })()}
           {live.testing ? (
             <span className="purple" title={`改了 ${live.testing.changed.join("、")}`}>

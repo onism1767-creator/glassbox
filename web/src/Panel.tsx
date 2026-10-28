@@ -4,6 +4,7 @@ import { SnapshotIndex, topDir, basename, COLORS } from "./model.ts";
 import { resolutionText, unresolvedKindText, changeWord, kindWord, dirLabel, layerBadge, statusWord, WORDS } from "./words.ts";
 import { fetchSource, type SourceExcerpt } from "./api.ts";
 import { TestsSection, FileTests } from "./TestsSection.tsx";
+import { AnnotationBlock, AnnotationsOverview } from "./Annotations.tsx";
 import { Tier } from "./Tier.tsx";
 import type { Evidence, FileEdge, CallEdge } from "../../src/types.ts";
 
@@ -110,6 +111,7 @@ export function Panel({ ix, selection, onNavigate }: { ix: SnapshotIndex; select
             ) : WORDS.noBaseline}
           </dd>
         </dl>
+        <AnnotationsOverview ix={ix} openEvidence={openEvidence} />
         <TestsSection ix={ix} openEvidence={openEvidence} />
         <TechSection ix={ix} openEvidence={openEvidence} />
         <p className="hint">点一个方块看它是什么；点一条线看是哪几行代码把它们连起来的；双击方块往里看。</p>
@@ -145,8 +147,9 @@ export function Panel({ ix, selection, onNavigate }: { ix: SnapshotIndex; select
     const changes = (s.baseline?.changes ?? []).filter((c) => topDir(c.path) === ref.dir);
     return (
       <aside className="panel">
-        <h2>{dirLabel(ref.dir, ix.names)}</h2>
+        <h2>{ix.labelFor(`dir:${ref.dir}`, ref.dir === "." ? "根目录" : ref.dir, dirLabel(ref.dir, ix.names))}</h2>
         <dl>
+          <AnnotationBlock ix={ix} node={`dir:${ref.dir}`} openEvidence={openEvidence} />
           <dt>在第几层（分层）</dt>
           <dd>
             {layer !== undefined ? (
@@ -189,8 +192,9 @@ export function Panel({ ix, selection, onNavigate }: { ix: SnapshotIndex; select
     const touch = ix.touched[ref.path];
     return (
       <aside className="panel">
-        <h2>{ref.path}</h2>
+        <h2>{ix.labelFor(`file:${ref.path}`, ref.path, ref.path)}</h2>
         <dl>
+          <AnnotationBlock ix={ix} node={`file:${ref.path}`} openEvidence={openEvidence} />
           <dt>基本情况</dt>
           <dd>
             {f?.language} · {f ? `${(f.size / 1024).toFixed(1)} KB` : ""} · 这次会话{changeWord(change.status, change.uncommitted)} <Tier t="T0" />
@@ -250,6 +254,7 @@ export function Panel({ ix, selection, onNavigate }: { ix: SnapshotIndex; select
         </p>
       ) : null}
       <dl>
+        <AnnotationBlock ix={ix} node={`sym:${ref.id}`} openEvidence={openEvidence} />
         <dt>谁调用了它（调用者 {callers.length}） <Tier t="T0" /></dt>
         <dd>
           {callers.length ? callers.map((c, i) => (
