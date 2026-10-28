@@ -60,6 +60,7 @@ node src/cli.ts snapshot <仓库>
 17. [旅程协议](docs/旅程协议.md)：旅程假设的格式、静态连通的四种说法、动态验证怎么算
 18. [阶段 8 记录](docs/阶段8-旅程/阶段8-记录.md)：旅程，GEO 一条六步的诊断旅程跑 46 个测试升级为 T3
 19. [架构落地率记录](docs/架构落地率/记录.md)：架构书对照代码，GEO 实测 87.4%，缺的 22 项逐条有原因
+20. [交接文档](docs/交接文档.md)：换窗口继续做的全部上下文，路径、规矩、GEO 现状、下一步
 
 技术决定：TypeScript on Node 24；tree-sitter 做语法结构；符号级调用图用 tree-sitter 语法层加 pyright 语言服务器精确层（原定的 scip-python 在 Windows 启动即崩，见阶段 3 记录）；node:sqlite 做事实库；React Flow 加 ELK 做画布；任务是仓库内 Markdown 文件；Claude Code hooks 做实时事件，协议本身与 AI 工具无关。
 
