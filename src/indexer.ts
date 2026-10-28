@@ -7,6 +7,7 @@ import { grammarFor, type GrammarName } from "./parser.ts";
 import { extractRawImports, resolveImports, buildFileEdges, detectPythonRoots, pythonTopLevelNames, readTsPaths, type RawImport } from "./imports.ts";
 import { buildRules, checkRules } from "./rules.ts";
 import { extractFileSymbols } from "./symbols.ts";
+import { extractEntryPoints, type EntryPoint } from "./entries.ts";
 import { extractCallSites, resolveCalls, type CallSite, type CallExtraction } from "./calls.ts";
 import { PyrightSession, preciseForFile } from "./pyright.ts";
 import type { FileRecord, ImportRecord, FileEdge, LayerRules, Violation, AllowedEdge, SymbolRecord, CallEdge } from "./types.ts";
@@ -49,6 +50,8 @@ export interface IndexResult {
   manifests: { path: string; text: string }[];
   /** overlay 指定的任务列表文件原文。 */
   taskSource?: { file: string; format: "emoji-list" | "standard"; text: string };
+  /** 入口候选：路由、CLI 子命令、main（T0，正则扫出来的）。 */
+  entries: EntryPoint[];
 }
 
 function symbolHash(lines: string[], startLine: number, endLine: number): string {
@@ -63,6 +66,7 @@ interface CachedFile {
   raw: RawImport[];
   symbols: SymbolRecord[];
   sites: CallSite[];
+  entries: EntryPoint[];
   precise?: { edges: CallEdge[]; resolvedKeys: Set<string>; external: number; attempted: number };
 }
 
@@ -122,7 +126,7 @@ export class Indexer {
       const record: FileRecord = { path: rel, dir: path.posix.dirname(rel), size: buffer.length, hash, language, binary };
       const content = !binary && buffer.length <= MAX_PARSE_BYTES ? buffer.toString("utf8") : undefined;
       const grammar = content !== undefined ? grammarFor(language) : null;
-      const entry: CachedFile = { record, mtimeMs: stat.mtimeMs, grammar, raw: [], symbols: [], sites: [], ...(content !== undefined ? { content } : {}) };
+      const entry: CachedFile = { record, mtimeMs: stat.mtimeMs, grammar, raw: [], symbols: [], sites: [], entries: [], ...(content !== undefined ? { content } : {}) };
       if (grammar && content !== undefined) {
         try {
           entry.raw = await extractRawImports(rel, content, grammar);
@@ -130,6 +134,7 @@ export class Indexer {
           // 每个函数或类自己的源码哈希：标注绑定到它，它变了标注才过时。
           const lines = content.split("\n");
           for (const s of entry.symbols) s.hash = symbolHash(lines, s.startLine, s.endLine);
+          entry.entries = extractEntryPoints(rel, content, record.language);
           entry.sites = await extractCallSites(rel, content, grammar);
         } catch {
           entry.raw = [];
@@ -224,6 +229,7 @@ export class Indexer {
       violations: check.violations, allowed: check.allowed, layeredEdges: check.layeredEdges,
       symbols, calls, precise, changedFiles: changed, elapsedMs: Date.now() - started, manifests,
       ...(overlay.tasks && taskText !== undefined ? { taskSource: { file: overlay.tasks.file, format: overlay.tasks.format ?? "emoji-list", text: taskText } } : {}),
+      entries: entries.flatMap((e) => e.entries),
     };
   }
 

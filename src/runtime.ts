@@ -34,6 +34,8 @@ export interface UpdateMessage {
 
 /** 测试结果目录里只认顶层写好的 .xml / .json（junit.xml、coverage.json、results.json）；自动跑过程中的 partial/ 和 .tmp 不算。 */
 const TEST_RESULT_FILE = /^\.workbench\/test-results\/[^/]+\.(?:xml|json)$/;
+/** 状态目录里人或 AI 写的声明文件（和机器写的验证记录）：变了要重算状态，但不用重新索引。 */
+const DECLARATION_FILES = new Set(["annotations.yaml", "journeys.yaml", "journeys-verified.json"]);
 const RESULT_FILE_NAME = /^[^/\\]+\.(?:xml|json)$/;
 
 /** 运行时：监听仓库，增量重算，向画布推送。 */
@@ -135,7 +137,7 @@ export class Runtime {
       // 状态目录在仓库外时，标注文件也要单独盯；只认 annotations.yaml，状态目录里别的文件（快照、事件日志）每轮都在写。
       try {
         this.annotationsWatcher = fs.watch(this.options.stateDir, (_event, filename) => {
-          if (filename === "annotations.yaml" && Date.now() - this.annotationsWrittenAt >= 3000) {
+          if (typeof filename === "string" && DECLARATION_FILES.has(filename) && Date.now() - this.annotationsWrittenAt >= 3000) {
             this.annotationsChanged = true;
             this.schedule(this.options.debounceMs ?? 250);
           }
@@ -172,7 +174,7 @@ export class Runtime {
     // 标准任务目录在 .workbench 里，索引器不读它，但它变了要重算任务。
     if (rel.startsWith(".workbench/tasks/")) return "file";
     // 人话标注：索引器不读，但变了要重算状态。
-    if (rel === ".workbench/annotations.yaml") return "annotations";
+    if (DECLARATION_FILES.has(rel.replace(/^\.workbench\//, "")) && rel.startsWith(".workbench/") && !rel.slice(11).includes("/")) return "annotations";
     // 测试结果：索引器不读，但变了要重读；自动跑过程中的 partial/junit.xml 和 .tmp 不算，不然每次自动跑都多一轮「重算 1 个文件」。
     if (rel.startsWith(".workbench/test-results/")) return TEST_RESULT_FILE.test(rel) ? "tests" : "ignore";
     if (isExcluded(rel, this.excludes, this.keepDotDirs)) return "ignore";
@@ -284,7 +286,11 @@ export class Runtime {
     });
     if (annotationsChanged) {
       const a = this.snapshot.annotations;
-      const text = a ? `人话标注更新：${a.summary.total} 条，${a.summary.stale} 条过时、${a.summary.orphan} 条没对象；还有 ${a.summary.todoDirs} 个目录、${a.summary.todoFiles} 个文件没标` : "标注文件变了";
+      const jn = this.snapshot.journeys;
+      const text = [
+        a ? `人话标注 ${a.summary.total} 条（${a.summary.stale} 条过时、${a.summary.orphan} 条没对象；还有 ${a.summary.todoDirs} 个目录、${a.summary.todoFiles} 个文件没标）` : "",
+        jn && jn.summary.total ? `旅程 ${jn.summary.total} 条（${jn.summary.verified} 条已验证、${jn.summary.stale} 条验证过时、${jn.summary.broken} 条断链）` : "",
+      ].filter(Boolean).join("；") || "声明文件变了";
       this.broadcast("activity", this.activity.record({ at: new Date().toISOString(), source: "system", kind: "annotations", text }));
     }
     if (testsChanged) {

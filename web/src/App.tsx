@@ -8,6 +8,7 @@ import { Panel, type Selection } from "./Panel.tsx";
 import { Tasks } from "./Tasks.tsx";
 import { testSummaryText } from "./TestsSection.tsx";
 import { annotationSummaryText } from "./Annotations.tsx";
+import { journeySummaryText } from "./Journeys.tsx";
 import { WORDS, sourceShort, dirShort } from "./words.ts";
 import type { ActivityEvent } from "../../src/types.ts";
 import type { AutoTestState } from "../../src/tests.ts";
@@ -92,6 +93,8 @@ function Canvas({ ix, live, events, onToggleActivity, showActivity }: { ix: Snap
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  /** 选中的旅程和当前走到第几步。 */
+  const [journeySel, setJourneySel] = useState<{ id: string; step: number } | null>(null);
   const [showTasks, setShowTasks] = useState<boolean>(() => !!ix.s.tasks);
   const [query, setQuery] = useState("");
   const [mountId, setMountId] = useState(0);
@@ -156,23 +159,40 @@ function Canvas({ ix, live, events, onToggleActivity, showActivity }: { ix: Snap
       if (ge) return { kind: "edge", e: ge };
     }
     const n = nodes.find((x) => x.id === selectedId);
-    return n && n.type !== "lane" ? { kind: "node", g: (n as Node<{ g: GNode }>).data.g } : null;
-  }, [nodes, selectedId, selectedEdgeId, selectedTaskId, gEdges]);
+    if (n && n.type !== "lane") return { kind: "node", g: (n as Node<{ g: GNode }>).data.g };
+    // 旅程排在节点后面：选了旅程还能点方块看细节，点空白处回到旅程面板，高亮一直在。
+    if (journeySel) return { kind: "journey", id: journeySel.id, step: journeySel.step };
+    return null;
+  }, [nodes, selectedId, selectedEdgeId, selectedTaskId, journeySel, gEdges]);
 
-  /** 选中任务时，它提到的文件在画布上高亮。 */
-  const hitFiles = useMemo(() => {
+  /** 选中任务时它提到的文件高亮；选中旅程时所有步骤高亮，当前这一步再加一圈。 */
+  const { hitFiles, focusFiles, focusNodes } = useMemo(() => {
     const t = selectedTaskId ? ix.s.tasks?.items.find((x) => x.id === selectedTaskId) : undefined;
-    return new Set(t?.files ?? []);
-  }, [ix, selectedTaskId]);
+    const hit = new Set(t?.files ?? []);
+    const focus = new Set<string>();
+    const focusIds = new Set<string>();
+    const j = journeySel ? ix.journeys.get(journeySel.id) : undefined;
+    if (j) {
+      for (const s of j.steps) if (s.file) hit.add(s.file);
+      const cur = j.steps[Math.max(0, Math.min(journeySel!.step, j.steps.length - 1))];
+      if (cur?.file) {
+        focus.add(cur.file);
+        focusIds.add(cur.node);
+      }
+    }
+    return { hitFiles: hit, focusFiles: focus, focusNodes: focusIds };
+  }, [ix, selectedTaskId, journeySel]);
   const nodesWithHit = useMemo(() => {
     if (!hitFiles.size) return nodes;
     return nodes.map((n) => {
       if (n.type === "lane") return n;
       const g = (n as Node<{ g: GNode }>).data.g;
       const hit = g.files.some((f) => hitFiles.has(f));
-      return hit ? ({ ...n, data: { ...n.data, hit: true } } as CanvasNode) : n;
+      // 符号级：只有当前这一步那个函数算 focus；文件级和目录级：含当前步文件的方块算 focus。
+      const focus = g.ref.kind === "symbol" ? focusNodes.has(n.id) : g.files.some((f) => focusFiles.has(f));
+      return hit || focus ? ({ ...n, data: { ...n.data, hit, focus } } as CanvasNode) : n;
     });
-  }, [nodes, hitFiles]);
+  }, [nodes, hitFiles, focusFiles, focusNodes]);
 
   const onSearch = (): void => {
     const q = query.trim();
@@ -212,6 +232,10 @@ function Canvas({ ix, live, events, onToggleActivity, showActivity }: { ix: Snap
           {(() => {
             const a = annotationSummaryText(ix);
             return a ? <span className={a.tone} title="人话名字由人或 AI 写，绑定到节点，代码变了自动标过时">{a.text}</span> : null;
+          })()}
+          {(() => {
+            const jt = journeySummaryText(ix);
+            return jt ? <span className={jt.tone} title="旅程是人或 AI 的假设；已验证 = 带覆盖率跑过指定测试，真实碰到了每一步">{jt.text}</span> : null;
           })()}
           {live.testing ? (
             <span className="purple" title={`改了 ${live.testing.changed.join("、")}`}>
@@ -274,7 +298,19 @@ function Canvas({ ix, live, events, onToggleActivity, showActivity }: { ix: Snap
           <Legend />
           {showActivity ? <Activity events={events} onClose={onToggleActivity} /> : null}
         </div>
-        <Panel ix={ix} selection={selection} onNavigate={navigate} />
+        <Panel
+          ix={ix}
+          selection={selection}
+          onNavigate={navigate}
+          onJourney={(id, step) => {
+            setJourneySel(id ? { id, step } : null);
+            if (id) {
+              setSelectedId(null);
+              setSelectedEdgeId(null);
+              setSelectedTaskId(null);
+            }
+          }}
+        />
       </div>
     </div>
   );

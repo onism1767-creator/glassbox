@@ -31,6 +31,11 @@ const help = `glassbox · 画布是代码的函数
   glassbox annotate set [仓库] --file 批.json [--author 名字]   交一批标注（逐条校验：节点存在、依据在节点里、哈希是现在的）
   glassbox annotate show [仓库] [--stale] [--json]             现有标注与状态
   glassbox annotate skill [仓库]              把"写标注"的 skill 装进仓库的 .claude/skills/
+  glassbox journey list [仓库] [--json]       旅程：每条的静态连通（T1）与动态验证（T3）状态
+  glassbox journey set [仓库] --file 批.json [--author 名字]    交一批旅程假设（入口 + 有序步骤 + 验证用的测试）
+  glassbox journey verify <id> [仓库]         带覆盖率跑这条旅程指定的测试，碰到所有步骤才算已验证
+  glassbox journey entries [仓库] [--json]    入口候选：路由、CLI 子命令、main
+  glassbox journey skill [仓库]               把"写旅程"的 skill 装进仓库的 .claude/skills/
                                              （服务开着就走 http://127.0.0.1:4400，--port 改端口，--no-server 强制本地索引）
   glassbox test [仓库] [--no-coverage] [-- pytest参数]  用项目自己的解释器跑 pytest，junit（和 coverage）写进 状态目录/test-results
   glassbox help                              显示本帮助
@@ -148,6 +153,28 @@ async function main(): Promise<void> {
       const py = readOverlay(root, option("overlay")).test_results?.python;
       const r = await runTests(root, { stateDir: state, ...(py ? { python: path.resolve(root, py) } : {}), coverage: !flag("no-coverage"), extraArgs: extra, log: (l) => process.stdout.write(l + "\n") });
       process.stdout.write(`\n退出码 ${r.exitCode}，${(r.elapsedMs / 1000).toFixed(1)} 秒\njunit：${r.junit}\n${r.coverage ? `coverage：${r.coverage}\n` : ""}${r.coverageConfig ? `覆盖率配置：${r.coverageConfig}\n` : ""}${r.coverageSkipped ? `覆盖率：${r.coverageSkipped}\n` : ""}`);
+      return;
+    }
+    case "journey": {
+      const sub = positional[0] ?? "";
+      const id = sub === "verify" ? positional[1] : undefined;
+      const root = resolveRoot(sub === "verify" ? positional[2] : positional[1]);
+      const state = stateDirFor(root);
+      const { journeyCommand } = await import("./journey-cli.ts");
+      const { readOverlay } = await import("./config.ts");
+      const py = readOverlay(root, option("overlay")).test_results?.python;
+      await journeyCommand(sub, root, {
+        stateDir: state,
+        ...indexOptions(),
+        ...(py ? { python: path.resolve(root, py) } : {}),
+        port: Number(option("port") ?? "4400"),
+        noServer: flag("no-server"),
+        json: flag("json"),
+        ...(id ? { id } : {}),
+        ...(option("file") ? { input: path.resolve(option("file")!) } : {}),
+        author: option("author") ?? "ai",
+        out: (t) => process.stdout.write(t),
+      });
       return;
     }
     case "annotate": {

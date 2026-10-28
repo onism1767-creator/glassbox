@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { Runtime, type RuntimeOptions } from "./runtime.ts";
 import type { HookPayload } from "./activity.ts";
 import { annotationSnapshot, annotationTodo, applyAnnotations, readAnnotations, lineCounter, type NodeWorld, type TodoOptions } from "./annotations.ts";
+import { journeySnapshot, applyJourneys, readJourneys, writeVerification } from "./journeys.ts";
+import { verifyJourney } from "./journey-verify.ts";
 
 const webDist = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "web", "dist");
 
@@ -68,6 +70,45 @@ export async function serve(root: string, options: ServeOptions): Promise<{ serv
       return s ? { files: s.files, symbols: s.symbols, edges: s.edges, layers: s.rules.layers } : null;
     };
     // 标注协议的 HTTP 入口：任何 AI 工具都能用。GET 看现状和待办，POST 交一批（逐条校验，收下的立刻进画布）。
+    // 旅程协议：GET 看现状（现算），POST 交一批，POST verify 带覆盖率跑指定的测试（同步等它跑完）。
+    const journeysNow = () => {
+      const s = runtime.snapshot!;
+      return journeySnapshot(options.stateDir, world()!, s.calls.edges, s.journeys?.entries ?? [], s.tests?.fileStatus, () => s.journeys?.source ?? "journeys.yaml");
+    };
+    if (url.pathname === "/api/journeys" && req.method === "POST") {
+      const w = world();
+      if (!w) return json(res, 503, { error: "快照尚未生成" });
+      let body: unknown;
+      try {
+        body = JSON.parse((await readBody(req, 4 * 1024 * 1024)) || "[]");
+      } catch {
+        return json(res, 400, { error: "不是 JSON" });
+      }
+      const author = body && typeof body === "object" && typeof (body as { author?: unknown }).author === "string" ? (body as { author: string }).author : "ai";
+      const result = applyJourneys(options.stateDir, w, body, { author, now: new Date().toISOString() });
+      if (result.accepted.length) runtime.annotationsWritten();
+      return json(res, 200, { root, accepted: result.accepted.map((j) => j.id), rejected: result.rejected, total: result.total, file: result.file });
+    }
+    if (url.pathname === "/api/journeys/verify" && req.method === "POST") {
+      const w = world();
+      if (!w) return json(res, 503, { error: "快照尚未生成" });
+      const id = url.searchParams.get("id") ?? "";
+      const journey = readJourneys(options.stateDir).items.find((j) => j.id === id);
+      if (!journey) return json(res, 404, { error: `没有这条旅程：${id}` });
+      try {
+        const v = await verifyJourney(root, w, journey, { stateDir: options.stateDir, ...(runtime.autoTester.options.python ? { python: runtime.autoTester.options.python } : {}), log: (l) => process.stdout.write(`[verify ${id}] ${l}\n`) });
+        writeVerification(options.stateDir, v);
+        runtime.annotationsWritten();
+        const view = journeysNow().items.find((j) => j.id === id);
+        return json(res, 200, { root, verification: v, status: view?.status, statusText: view?.statusText, steps: view?.steps });
+      } catch (error) {
+        return json(res, 500, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    if (url.pathname === "/api/journeys" && req.method === "GET") {
+      if (!world()) return json(res, 503, { error: "快照尚未生成" });
+      return json(res, 200, { root, ...journeysNow() });
+    }
     if (url.pathname === "/api/annotations" && req.method === "POST") {
       const w = world();
       if (!w) return json(res, 503, { error: "快照尚未生成" });

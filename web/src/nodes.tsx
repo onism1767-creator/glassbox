@@ -2,7 +2,7 @@ import { Handle, Position, useStore, type NodeProps, type Node } from "@xyflow/r
 import type { GNode, Lane } from "./model.ts";
 import { COLORS } from "./model.ts";
 
-type GProps = NodeProps<Node<{ g: GNode; hit?: boolean }>>;
+type GProps = NodeProps<Node<{ g: GNode; hit?: boolean; focus?: boolean }>>;
 
 function useDetail(): boolean {
   return useStore((s) => s.transform[2] >= 0.55);
@@ -21,12 +21,12 @@ function Badges({ g }: { g: GNode }) {
   );
 }
 
-function Box({ g, selected, className, hit }: { g: GNode; selected: boolean; className: string; hit?: boolean }) {
+function Box({ g, selected, className, hit, focus }: { g: GNode; selected: boolean; className: string; hit?: boolean; focus?: boolean }) {
   const detail = useDetail();
   const changeColor = g.change && g.change !== "clean" ? COLORS.change[g.change] : undefined;
   return (
     <div
-      className={`gnode ${className}${selected ? " selected" : ""}${g.drill ? " drillable" : ""}${hit ? " hit" : ""}`}
+      className={`gnode ${className}${selected ? " selected" : ""}${g.drill ? " drillable" : ""}${hit ? " hit" : ""}${focus ? " focus" : ""}`}
       style={changeColor ? { boxShadow: `inset 5px 0 0 ${changeColor}` } : undefined}
       title={g.drill ? "双击下钻" : undefined}
     >
@@ -40,16 +40,16 @@ function Box({ g, selected, className, hit }: { g: GNode; selected: boolean; cla
 }
 
 export function DirNode({ data, selected }: GProps) {
-  return <Box g={data.g} selected={!!selected} hit={data.hit} className={`dir${data.g.layer !== undefined ? ` l${data.g.layer}` : ""}`} />;
+  return <Box g={data.g} selected={!!selected} hit={data.hit} focus={data.focus} className={`dir${data.g.layer !== undefined ? ` l${data.g.layer}` : ""}`} />;
 }
 export function FileNode({ data, selected }: GProps) {
-  return <Box g={data.g} selected={!!selected} hit={data.hit} className="file" />;
+  return <Box g={data.g} selected={!!selected} hit={data.hit} focus={data.focus} className="file" />;
 }
 export function SymbolNode({ data, selected }: GProps) {
-  return <Box g={data.g} selected={!!selected} hit={data.hit} className="symbol" />;
+  return <Box g={data.g} selected={!!selected} hit={data.hit} focus={data.focus} className="symbol" />;
 }
 export function PortalNode({ data, selected }: GProps) {
-  return <Box g={data.g} selected={!!selected} hit={data.hit} className="portal" />;
+  return <Box g={data.g} selected={!!selected} hit={data.hit} focus={data.focus} className="portal" />;
 }
 export function LaneNode({ data }: NodeProps<Node<{ lane: Lane }>>) {
   return (

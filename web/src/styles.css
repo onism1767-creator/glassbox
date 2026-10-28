@@ -159,3 +159,15 @@ button { font: inherit; }
 .legend i { display: inline-block; width: 14px; height: 0; border-top: 3px solid; border-color: inherit; vertical-align: middle; margin-right: 6px; background: none !important; }
 .legend div { display: flex; align-items: center; }
 .legend div i { border-top-color: currentColor; }
+
+/* 旅程：当前这一步 */
+.gnode.focus { box-shadow: 0 0 0 4px #7c3aed !important; }
+.journey-row { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; margin: 4px 0; cursor: pointer; background: #fff; }
+.journey-row:hover { background: var(--bg); }
+.journey-row .st { font-size: 11px; padding: 1px 6px; border-radius: 10px; margin-left: 6px; border: 1px solid var(--border); }
+.journey-steps { list-style: none; padding: 0; margin: 6px 0; }
+.journey-steps li { padding: 4px 6px; border-left: 3px solid var(--border); margin: 2px 0; }
+.journey-steps li.focus { border-left-color: #7c3aed; background: #f3efff; }
+.journey-steps .link { font-size: 12px; color: var(--muted); padding: 2px 6px 2px 14px; }
+.journey-steps .link.bad { color: var(--red); }
+.journey-nav button { margin-right: 6px; }

@@ -5,10 +5,11 @@ import { resolutionText, unresolvedKindText, changeWord, kindWord, dirLabel, lay
 import { fetchSource, type SourceExcerpt } from "./api.ts";
 import { TestsSection, FileTests } from "./TestsSection.tsx";
 import { AnnotationBlock, AnnotationsOverview } from "./Annotations.tsx";
+import { JourneysOverview, JourneyPanel } from "./Journeys.tsx";
 import { Tier } from "./Tier.tsx";
 import type { Evidence, FileEdge, CallEdge } from "../../src/types.ts";
 
-export type Selection = { kind: "node"; g: GNode } | { kind: "edge"; e: GEdge } | { kind: "task"; id: string };
+export type Selection = { kind: "node"; g: GNode } | { kind: "edge"; e: GEdge } | { kind: "task"; id: string } | { kind: "journey"; id: string; step: number };
 
 function EvidenceLine({ ev, onOpen, mark }: { ev: Evidence; onOpen: (ev: Evidence) => void; mark?: "violation" | "allowed" }) {
   return (
@@ -51,7 +52,7 @@ function SourceBlock({ open }: { open: { ev: Evidence; excerpt?: SourceExcerpt; 
 
 type OpenSource = { ev: Evidence; excerpt?: SourceExcerpt; error?: string } | null;
 
-export function Panel({ ix, selection, onNavigate }: { ix: SnapshotIndex; selection: Selection | null; onNavigate: (level: Level, select?: string) => void }) {
+export function Panel({ ix, selection, onNavigate, onJourney }: { ix: SnapshotIndex; selection: Selection | null; onNavigate: (level: Level, select?: string) => void; onJourney: (id: string | null, step: number) => void }) {
   const [open, setOpen] = useState<OpenSource>(null);
   useEffect(() => setOpen(null), [selection]);
   const openEvidence = (ev: Evidence): void => {
@@ -111,6 +112,7 @@ export function Panel({ ix, selection, onNavigate }: { ix: SnapshotIndex; select
             ) : WORDS.noBaseline}
           </dd>
         </dl>
+        <JourneysOverview ix={ix} onJourney={onJourney} />
         <AnnotationsOverview ix={ix} openEvidence={openEvidence} />
         <TestsSection ix={ix} openEvidence={openEvidence} />
         <TechSection ix={ix} openEvidence={openEvidence} />
@@ -122,6 +124,13 @@ export function Panel({ ix, selection, onNavigate }: { ix: SnapshotIndex; select
 
   if (selection.kind === "edge") return <EdgePanel ix={ix} e={selection.e} openEvidence={openEvidence} markOf={markOf} open={open} />;
   if (selection.kind === "task") return <TaskPanel ix={ix} id={selection.id} openEvidence={openEvidence} open={open} onNavigate={onNavigate} />;
+  if (selection.kind === "journey") {
+    return (
+      <JourneyPanel ix={ix} id={selection.id} step={selection.step} openEvidence={openEvidence} onNavigate={onNavigate} onJourney={onJourney}>
+        {open ? <SourceBlock open={open} /> : null}
+      </JourneyPanel>
+    );
+  }
 
   const selected = selection.g;
   const ref = selected.ref;

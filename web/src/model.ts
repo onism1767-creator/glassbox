@@ -1,6 +1,7 @@
 import type { Snapshot } from "../../src/snapshot.ts";
 import type { TestCase } from "../../src/tests.ts";
 import type { AnnotationView } from "../../src/annotations.ts";
+import type { JourneyView } from "../../src/journeys.ts";
 import type { FileRecord, SymbolRecord, CallEdge, FileEdge, Violation, AllowedEdge, ChangeRecord, UnresolvedCall, Touch } from "../../src/types.ts";
 import { WORDS, dirLabel, dirShort, layerLabel, layerBadge, kindWord, changeWord, type Names, EMPTY_NAMES } from "./words.ts";
 
@@ -106,6 +107,7 @@ export class SnapshotIndex {
   readonly names: Names;
   /** 人话标注按节点 id 查（dir:x、file:x、sym:x）。 */
   readonly annotations = new Map<string, AnnotationView>();
+  readonly journeys = new Map<string, JourneyView>();
   readonly s: Snapshot;
   /** 测试用例按 id 查，懒建一次。 */
   private testCaseById: Map<string, TestCase> | null = null;
@@ -115,6 +117,7 @@ export class SnapshotIndex {
     this.touched = s.activity?.touched ?? {};
     this.names = s.names ? { layers: s.names.layers, dirs: s.names.dirs } : EMPTY_NAMES;
     for (const a of s.annotations?.items ?? []) this.annotations.set(a.node, a);
+    for (const j of s.journeys?.items ?? []) this.journeys.set(j.id, j);
     for (const f of s.files) {
       this.files.set(f.path, f);
       const top = topDir(f.path);
