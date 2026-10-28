@@ -94,3 +94,11 @@ test("emoji 清单：编号后面紧跟括号（验收说明）时，标题取�
   assert.equal(tasks[0]?.title, "文案与数字");
   assert.equal(tasks[0]?.testsClaimed, 329);
 });
+
+test("emoji 清单：Windows 换行（CRLF）的文件也能读", () => {
+  const tasks = parseEmojiList("docs/任务列表.md", "- ✅ **S1** 删接口(2026-10-12;3 测试全绿) `app/service.py`\r\n- 🔨 **S2** 做页面\r\n");
+  assert.equal(tasks.length, 2);
+  assert.equal(tasks[0]?.title, "删接口");
+  assert.equal(tasks[0]?.testsClaimed, 3);
+  assert.equal(tasks[1]?.status, "developing");
+});

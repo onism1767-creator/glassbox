@@ -63,7 +63,8 @@ const FILE_RX = /`([\w./-]+\.(?:py|yaml|yml|md|html|json|txt|toml|ts|tsx|js|css|
 export function parseEmojiList(file: string, text: string): TaskRecord[] {
   const tasks: TaskRecord[] = [];
   const stack: { indent: number; id: string }[] = [];
-  const lines = text.split("\n");
+  // Windows 上改过的文件常是 CRLF；正则里的 . 不匹配 \r，不去掉的话整个清单一条都读不出。
+  const lines = text.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? "";
     const m = /^(\s*)-\s*(✅|🔨|⏳|❌|🧪)\s*(.*)$/u.exec(line);
@@ -135,7 +136,7 @@ export function parseStandardTask(file: string, text: string): TaskRecord | null
   const status = (["todo", "developing", "review", "rework", "passed", "integrated", "integration-review", "integration-passed", "handtest", "done"] as TaskStatus[]).includes(statusRaw as TaskStatus) ? (statusRaw as TaskStatus) : "todo";
   const list = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : typeof v === "string" && v ? [v] : []);
   const criteria: TaskRecord["criteria"] = [];
-  for (const line of body.split("\n")) {
+  for (const line of body.split(/\r?\n/)) {
     const c = /^\s*-\s*\[([ xX])\]\s*(.+)$/.exec(line);
     if (c) criteria.push({ text: (c[2] ?? "").trim(), done: (c[1] ?? " ") !== " " });
   }
