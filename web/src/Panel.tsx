@@ -6,6 +6,7 @@ import { fetchSource, type SourceExcerpt } from "./api.ts";
 import { TestsSection, FileTests } from "./TestsSection.tsx";
 import { AnnotationBlock, AnnotationsOverview } from "./Annotations.tsx";
 import { JourneysOverview, JourneyPanel } from "./Journeys.tsx";
+import { ArchitectureOverview } from "./Architecture.tsx";
 import { Tier } from "./Tier.tsx";
 import type { Evidence, FileEdge, CallEdge } from "../../src/types.ts";
 
@@ -112,6 +113,7 @@ export function Panel({ ix, selection, onNavigate, onJourney }: { ix: SnapshotIn
             ) : WORDS.noBaseline}
           </dd>
         </dl>
+        <ArchitectureOverview ix={ix} openEvidence={openEvidence} />
         <JourneysOverview ix={ix} onJourney={onJourney} />
         <AnnotationsOverview ix={ix} openEvidence={openEvidence} />
         <TestsSection ix={ix} openEvidence={openEvidence} />

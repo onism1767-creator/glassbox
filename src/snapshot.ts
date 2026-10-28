@@ -12,6 +12,7 @@ import { computeAllProgress, computeGauge, findInconsistencies, type TaskProgres
 import { readTestResults, type TestSnapshot, type AutoTestState } from "./tests.ts";
 import { annotationSnapshot, type AnnotationSnapshot } from "./annotations.ts";
 import { journeySnapshot, type JourneySnapshot } from "./journeys.ts";
+import { buildArchitecture, type ArchitectureSnapshot } from "./architecture.ts";
 import type { FileRecord, ImportRecord, FileEdge, LayerRules, Violation, AllowedEdge, CommitRecord, Tier, SymbolRecord, CallEdge, UnresolvedCall, ActivityEvent, Touch } from "./types.ts";
 
 export interface DirModule {
@@ -68,6 +69,8 @@ export interface Snapshot {
   annotations?: AnnotationSnapshot;
   /** 旅程：入口 + 有序步骤的假设，静态连通（T1）与动态验证（T3）。 */
   journeys?: JourneySnapshot;
+  /** 架构落地率：架构书声明的文件、目录、类、函数（T2）对照索引（T0）。 */
+  architecture?: ArchitectureSnapshot;
   /** 任务：声明层（任务文件）+ 证据层（进度信号、阶段对照、不一致）。 */
   tasks?: {
     source: { file: string; format: "emoji-list" | "standard"; tier: Tier; readAt?: string };
@@ -184,6 +187,10 @@ export function assembleSnapshot(input: AssembleInput): Snapshot {
   };
   const annotations = input.stateDir ? annotationSnapshot(input.stateDir, world, relState) : undefined;
   const journeys = input.stateDir ? journeySnapshot(input.stateDir, world, result.calls.edges, result.entries, tests?.fileStatus, relState) : undefined;
+  const tech = computeTech(result.imports, result.manifests);
+  const architecture = result.architectureSource
+    ? buildArchitecture(result.architectureSource, { files: result.files, symbols: result.symbols }, new Set([...tech.declared.map((d) => d.name.toLowerCase()), ...result.architectureSource.ignore.map((w) => w.toLowerCase())]))
+    : undefined;
   const tasks = buildTasks(input, tests);
   return {
     schemaVersion: 1,
@@ -217,10 +224,11 @@ export function assembleSnapshot(input: AssembleInput): Snapshot {
     ...(baseline ? { baseline } : {}),
     ...(activity ? { activity } : {}),
     names: { layers: result.overlay.names?.layers ?? {}, dirs: result.overlay.names?.dirs ?? {}, tier: "T2" },
-    tech: computeTech(result.imports, result.manifests),
+    tech,
     ...(tests ? { tests } : {}),
     ...(annotations ? { annotations } : {}),
     ...(journeys ? { journeys } : {}),
+    ...(architecture ? { architecture } : {}),
     ...(tasks ? { tasks } : {}),
     changedFiles: result.changedFiles,
     elapsedMs: result.elapsedMs,

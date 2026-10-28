@@ -23,6 +23,7 @@ const help = `glassbox · 画布是代码的函数
   glassbox baseline show [仓库]
   glassbox diff [仓库]                        基线到工作区的变更，按顶层目录投影
   glassbox snapshot [仓库] [--max-commits N]   全量快照：写 状态目录/snapshot.json 与 facts.sqlite
+  glassbox arch [仓库] [--json]               架构落地率：架构书声明的文件、目录、类、函数对照代码，缺失与多出各列一表
   glassbox serve [仓库] [--port 4400] [--no-auto-test]  启动画布服务（先 npm run web:build）：首次全量，之后监听文件增量重算并实时推送；改了 .py 自动只跑相关测试
   glassbox hooks install [仓库] [--port 4400]  把 Claude Code hooks 装进仓库的 .claude/settings.json（SessionStart 记基线、PostToolUse 记触碰）
   glassbox hooks print [--port 4400]          只打印 hooks 配置，自己合并
@@ -217,6 +218,33 @@ async function main(): Promise<void> {
         return;
       }
       throw new Error("用法: glassbox hooks install|print [仓库]");
+    }
+    case "arch": {
+      const root = resolveRoot(positional[0]);
+      const { indexRepository } = await import("./index.ts");
+      const { buildArchitecture } = await import("./architecture.ts");
+      const { computeTech } = await import("./tech.ts");
+      const r = await indexRepository(root, indexOptions());
+      if (!r.architectureSource) throw new Error("没找到架构书：在 overlay 的 architecture.file 里指定，或把根目录下名字带「架构」/ architecture 的 .md 当架构书");
+      const tech = computeTech(r.imports, r.manifests);
+      const a = buildArchitecture(r.architectureSource, { files: r.files, symbols: r.symbols }, new Set([...tech.declared.map((d) => d.name.toLowerCase()), ...r.architectureSource.ignore.map((w) => w.toLowerCase())]));
+      if (flag("json")) {
+        process.stdout.write(JSON.stringify(a, null, 1) + "\n");
+        return;
+      }
+      const s = a.summary;
+      const lines = [`架构落地率 ${s.rate}%：${a.source.file} 声明了 ${s.declared} 项（文件和目录 ${s.files.declared}、类和函数 ${s.symbols.declared}），代码里存在 ${s.present}，缺 ${s.missing}`];
+      for (const c of a.byChapter.filter((x) => x.missing.length)) lines.push(`  ${c.chapter}：${c.present} / ${c.declared}，缺 ${c.missing.join("、")}`);
+      lines.push(`  另 ${a.byChapter.filter((c) => c.declared && !c.missing.length).length} 个章节全部落地`);
+      const missing = a.declarations.filter((d) => d.status === "missing" && !d.weak);
+      if (missing.length) {
+        lines.push("缺失（蓝图还没落地，或改了名没改书）：");
+        for (const d of missing) lines.push(`  ${d.kind} ${d.name}  ${d.evidence.path}:${d.evidence.line}${d.hint ? `  ${d.hint}` : ""}`);
+      }
+      if (a.weak.missing.length) lines.push(`正文里的驼峰词（不算进落地率）：${a.weak.present} 个代码里有，没有的 ${a.weak.missing.length} 个：${a.weak.missing.map((w) => w.name).join("、")}`);
+      lines.push(`代码里有、架构书没提的：目录 ${a.extra.dirs.join("、") || "无"}；文件 ${a.extra.files} 个；类 ${a.extra.classes.length} 个${a.extra.classes.length ? `（${a.extra.classes.slice(0, 8).map((c) => c.name).join("、")}${a.extra.classes.length > 8 ? "…" : ""}）` : ""}`);
+      process.stdout.write(lines.join("\n") + "\n");
+      return;
     }
     case "snapshot": {
       const root = resolveRoot(positional[0]);

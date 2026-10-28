@@ -41,3 +41,7 @@ names:
     docs: 文档
     ".claude": Claude 配置
     ".": 根目录（规格与工程配置）
+
+# 架构书（T2 声明），算落地率：声明的文件、目录、类、函数对照代码
+architecture:
+  file: GEO工具项目架构书v0.4.md

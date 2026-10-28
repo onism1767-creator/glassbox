@@ -28,6 +28,8 @@ export interface Overlay {
   names?: { layers?: Record<string, string>; dirs?: Record<string, string> };
   /** 项目已有的任务列表文件；没有就用 .workbench/tasks/*.md。 */
   tasks?: { file: string; format?: "emoji-list" | "standard" };
+  /** 架构书（Markdown，相对仓库）；缺省找根目录名字带「架构」或 architecture 的 .md。ignore：不当成类名的词。 */
+  architecture?: { file: string; ignore?: string[] };
   /**
    * 测试结果文件的位置（相对仓库）；缺省找 状态目录/test-results 与仓库根。
    * auto：改了文件后自动只跑相关测试（缺省开，前提是找得到带 pytest 的解释器）；python：解释器路径；debounce_ms：最后一次改动后等多久再跑。
@@ -85,6 +87,7 @@ export function readOverlay(root: string, override?: string): Overlay {
     stage_tag: typeof o.stage_tag === "string" ? o.stage_tag : undefined,
     names: o.names && typeof o.names === "object" ? { layers: stringMap(o.names.layers), dirs: stringMap(o.names.dirs) } : undefined,
     tasks: o.tasks && typeof o.tasks === "object" && typeof o.tasks.file === "string" ? { file: o.tasks.file, format: o.tasks.format === "standard" ? "standard" : "emoji-list" } : undefined,
+    architecture: o.architecture && typeof o.architecture === "object" && typeof o.architecture.file === "string" ? { file: o.architecture.file, ...(stringList(o.architecture.ignore) ? { ignore: stringList(o.architecture.ignore)! } : {}) } : undefined,
     test_results: o.test_results && typeof o.test_results === "object"
       ? {
           ...(typeof o.test_results.junit === "string" ? { junit: o.test_results.junit } : {}),

@@ -9,6 +9,7 @@ import { Tasks } from "./Tasks.tsx";
 import { testSummaryText } from "./TestsSection.tsx";
 import { annotationSummaryText } from "./Annotations.tsx";
 import { journeySummaryText } from "./Journeys.tsx";
+import { architectureSummaryText } from "./Architecture.tsx";
 import { WORDS, sourceShort, dirShort } from "./words.ts";
 import type { ActivityEvent } from "../../src/types.ts";
 import type { AutoTestState } from "../../src/tests.ts";
@@ -232,6 +233,10 @@ function Canvas({ ix, live, events, onToggleActivity, showActivity }: { ix: Snap
           {(() => {
             const a = annotationSummaryText(ix);
             return a ? <span className={a.tone} title="人话名字由人或 AI 写，绑定到节点，代码变了自动标过时">{a.text}</span> : null;
+          })()}
+          {(() => {
+            const at = architectureSummaryText(ix);
+            return at ? <span className={at.tone} title="架构书里写的文件、目录、类、函数，代码里存在多少">{at.text}</span> : null;
           })()}
           {(() => {
             const jt = journeySummaryText(ix);

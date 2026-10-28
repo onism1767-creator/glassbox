@@ -8,6 +8,7 @@ import { extractRawImports, resolveImports, buildFileEdges, detectPythonRoots, p
 import { buildRules, checkRules } from "./rules.ts";
 import { extractFileSymbols } from "./symbols.ts";
 import { extractEntryPoints, type EntryPoint } from "./entries.ts";
+import { guessArchitectureFile } from "./architecture.ts";
 import { extractCallSites, resolveCalls, type CallSite, type CallExtraction } from "./calls.ts";
 import { PyrightSession, preciseForFile } from "./pyright.ts";
 import type { FileRecord, ImportRecord, FileEdge, LayerRules, Violation, AllowedEdge, SymbolRecord, CallEdge } from "./types.ts";
@@ -52,6 +53,8 @@ export interface IndexResult {
   taskSource?: { file: string; format: "emoji-list" | "standard"; text: string };
   /** 入口候选：路由、CLI 子命令、main（T0，正则扫出来的）。 */
   entries: EntryPoint[];
+  /** 架构书原文（overlay 指定或根目录自动找到的）。 */
+  architectureSource?: { file: string; text: string; ignore: string[] };
 }
 
 function symbolHash(lines: string[], startLine: number, endLine: number): string {
@@ -224,12 +227,15 @@ export class Indexer {
       if (!p.includes("/") && (p === "pyproject.toml" || p === "package.json" || /^requirements.*\.txt$/.test(p)) && e.content !== undefined) manifests.push({ path: p, text: e.content });
     }
     const taskText = overlay.tasks ? this.cache.get(overlay.tasks.file)?.content : undefined;
+    const archFile = overlay.architecture?.file ?? guessArchitectureFile(files);
+    const archText = archFile ? this.cache.get(archFile)?.content : undefined;
     return {
       root: this.root, viaGit, overlay, files, imports, edges, pythonRoots, rules, ruleProblems,
       violations: check.violations, allowed: check.allowed, layeredEdges: check.layeredEdges,
       symbols, calls, precise, changedFiles: changed, elapsedMs: Date.now() - started, manifests,
       ...(overlay.tasks && taskText !== undefined ? { taskSource: { file: overlay.tasks.file, format: overlay.tasks.format ?? "emoji-list", text: taskText } } : {}),
       entries: entries.flatMap((e) => e.entries),
+      ...(archFile && archText !== undefined ? { architectureSource: { file: archFile, text: archText, ignore: overlay.architecture?.ignore ?? [] } } : {}),
     };
   }
 
