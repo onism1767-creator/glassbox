@@ -141,7 +141,7 @@ async function main(): Promise<void> {
       const { readOverlay } = await import("./config.ts");
       const py = readOverlay(root, option("overlay")).test_results?.python;
       const r = await runTests(root, { stateDir: state, ...(py ? { python: path.resolve(root, py) } : {}), coverage: !flag("no-coverage"), extraArgs: extra, log: (l) => process.stdout.write(l + "\n") });
-      process.stdout.write(`\n退出码 ${r.exitCode}，${(r.elapsedMs / 1000).toFixed(1)} 秒\njunit：${r.junit}\n${r.coverage ? `coverage：${r.coverage}\n` : ""}${r.coverageSkipped ? `覆盖率：${r.coverageSkipped}\n` : ""}`);
+      process.stdout.write(`\n退出码 ${r.exitCode}，${(r.elapsedMs / 1000).toFixed(1)} 秒\njunit：${r.junit}\n${r.coverage ? `coverage：${r.coverage}\n` : ""}${r.coverageConfig ? `覆盖率配置：${r.coverageConfig}\n` : ""}${r.coverageSkipped ? `覆盖率：${r.coverageSkipped}\n` : ""}`);
       return;
     }
     case "hooks": {

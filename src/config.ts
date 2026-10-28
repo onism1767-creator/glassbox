@@ -11,6 +11,8 @@ export interface GuardTestRef {
 export interface Overlay {
   version: 1;
   exclude: string[];
+  /** 以点开头的目录缺省一律不看（数据库数据、缓存、工具状态）；这里列出例外（如 .ci、.scripts）。固定排除名单里的（.git、.venv…）仍不看。 */
+  keep_dot_dirs?: string[];
   /** Python 绝对导入的根目录，相对仓库；缺省自动探测。 */
   source_roots?: string[];
   layers?: {
@@ -75,6 +77,7 @@ export function readOverlay(root: string, override?: string): Overlay {
   return {
     version: 1,
     exclude: stringList(o.exclude) ?? [],
+    keep_dot_dirs: stringList(o.keep_dot_dirs),
     source_roots: stringList(o.source_roots),
     layers: o.layers,
     isolated_packages: stringList(o.isolated_packages),

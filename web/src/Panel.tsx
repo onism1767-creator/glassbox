@@ -1,16 +1,13 @@
 import { useEffect, useState } from "react";
 import type { GNode, GEdge, Level } from "./model.ts";
 import { SnapshotIndex, topDir, basename, COLORS } from "./model.ts";
-import { tierText, resolutionText, unresolvedKindText, changeWord, kindWord, dirLabel, layerBadge, statusWord, WORDS } from "./words.ts";
+import { resolutionText, unresolvedKindText, changeWord, kindWord, dirLabel, layerBadge, statusWord, WORDS } from "./words.ts";
 import { fetchSource, type SourceExcerpt } from "./api.ts";
 import { TestsSection, FileTests } from "./TestsSection.tsx";
+import { Tier } from "./Tier.tsx";
 import type { Evidence, FileEdge, CallEdge } from "../../src/types.ts";
 
 export type Selection = { kind: "node"; g: GNode } | { kind: "edge"; e: GEdge } | { kind: "task"; id: string };
-
-function Tier({ t }: { t: string }) {
-  return <span className={`tier ${t}`} title={tierText(t)}>{tierText(t)}</span>;
-}
 
 function EvidenceLine({ ev, onOpen, mark }: { ev: Evidence; onOpen: (ev: Evidence) => void; mark?: "violation" | "allowed" }) {
   return (

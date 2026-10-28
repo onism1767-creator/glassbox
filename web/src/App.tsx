@@ -289,7 +289,8 @@ export function App() {
         .then((s) => {
           if (disposed) return;
           setIx(new SnapshotIndex(s));
-          setLive((l) => ({ ...l, refreshing: false }));
+          // 快照里带着自动跑的当前状态；SSE 断线期间跑完的，靠这里把顶栏的「正在跑」清掉。
+          setLive((l) => ({ ...l, refreshing: false, testing: s.tests?.auto?.running }));
         })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
     };

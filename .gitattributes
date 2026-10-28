@@ -1,0 +1,7 @@
+# 仓库里一律 LF，免得整文件换行符转换混进功能提交的 diff（见错误库 E-032）。
+* text=auto eol=lf
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.gif binary
+*.wasm binary

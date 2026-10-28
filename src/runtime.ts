@@ -32,6 +32,10 @@ export interface UpdateMessage {
   files: number;
 }
 
+/** 测试结果目录里只认顶层写好的 .xml / .json（junit.xml、coverage.json、results.json）；自动跑过程中的 partial/ 和 .tmp 不算。 */
+const TEST_RESULT_FILE = /^\.workbench\/test-results\/[^/]+\.(?:xml|json)$/;
+const RESULT_FILE_NAME = /^[^/\\]+\.(?:xml|json)$/;
+
 /** 运行时：监听仓库，增量重算，向画布推送。 */
 export class Runtime {
   readonly indexer: Indexer;
@@ -43,12 +47,17 @@ export class Runtime {
   private resultsWatcher: fs.FSWatcher | null = null;
   private pending = new Set<string>();
   private gitChanged = false;
+  /** 测试结果文件变了（glassbox test 全量跑完，或自动跑合并出了 results.json）。 */
+  private testsChanged = false;
+  /** 自动跑刚写完 results.json 的时间：直接通知已经安排了重算，紧随其后的监听事件是同一件事，不再多算一轮。 */
+  private resultsWrittenAt = 0;
   private pendingReason: UpdateMessage["reason"] = "files";
   private timer: NodeJS.Timeout | null = null;
   private running: Promise<void> | null = null;
   private rerun = false;
   private readonly clients = new Set<http.ServerResponse>();
   private readonly excludes: RegExp[];
+  private readonly keepDotDirs: Set<string>;
   private readonly log: (line: string) => void;
   readonly root: string;
   readonly options: RuntimeOptions;
@@ -60,6 +69,7 @@ export class Runtime {
     this.activity = new ActivityLog(options.stateDir);
     const overlay = readOverlay(root, options.overlayFile);
     this.excludes = overlay.exclude.map(globToRegExp);
+    this.keepDotDirs = new Set(overlay.keep_dot_dirs ?? []);
     this.log = options.log ?? ((line) => process.stdout.write(line + "\n"));
     const tr = overlay.test_results ?? {};
     const python = tr.python ? path.resolve(root, tr.python) : guessPythonPath(root);
@@ -69,7 +79,7 @@ export class Runtime {
         stateDir: options.stateDir,
         ...(python ? { python } : {}),
         enabled: options.autoTest ?? tr.auto ?? true,
-        ...(tr.debounce_ms ? { debounceMs: tr.debounce_ms } : {}),
+        ...(tr.debounce_ms !== undefined ? { debounceMs: tr.debounce_ms } : {}),
         log: (l) => this.log(`[pytest] ${l}`),
       },
       {
@@ -78,7 +88,8 @@ export class Runtime {
         onEvent: (ev) => this.broadcast("activity", this.activity.record(ev)),
         onState: (s) => this.broadcast("autotest", s),
         onResults: () => {
-          this.pendingReason = "tests";
+          this.resultsWrittenAt = Date.now();
+          this.testsChanged = true;
           this.schedule(0);
         },
       },
@@ -101,12 +112,14 @@ export class Runtime {
     }
     // 状态目录在仓库外时，单独盯着它的 test-results（glassbox test 往那里写）。
     const results = path.join(this.options.stateDir, "test-results");
-    if (!results.startsWith(this.root)) {
+    const relToRoot = path.relative(this.root, results);
+    const outside = relToRoot.startsWith("..") || path.isAbsolute(relToRoot);
+    if (outside) {
       fs.mkdirSync(results, { recursive: true });
       try {
         this.resultsWatcher = fs.watch(results, (_event, filename) => {
-          if (typeof filename === "string" && /\.(xml|json)$/.test(filename)) {
-            this.pendingReason = "tests";
+          if (typeof filename === "string" && RESULT_FILE_NAME.test(filename) && !this.ownResultsEvent(filename)) {
+            this.testsChanged = true;
             this.schedule(this.options.debounceMs ?? 250);
           }
         });
@@ -129,26 +142,40 @@ export class Runtime {
     await this.indexer.close();
   }
 
-  /** 把一个文件系统事件归类：git 元数据、源码、忽略。 */
-  classify(rel: string): "git" | "file" | "ignore" {
+  /** 把一个文件系统事件归类：git 元数据、源码、测试结果、忽略。 */
+  classify(rel: string): "git" | "file" | "tests" | "ignore" {
     if (rel === ".git" || rel.startsWith(".git/")) {
       const inner = rel.slice(5);
       // 不监听 .git/index：git status 本身会刷新它，会把自己触发成死循环；提交看 HEAD、refs、logs/HEAD 就够。
       if (inner === "HEAD" || inner === "ORIG_HEAD" || inner === "packed-refs" || inner.startsWith("refs/") || inner === "logs/HEAD") return "git";
       return "ignore";
     }
-    // 标准任务目录和测试结果在 .workbench 里，索引器不读它们，但它们变了要重算。
-    if (rel.startsWith(".workbench/tasks/") || rel.startsWith(".workbench/test-results/")) return "file";
-    if (isExcluded(rel, this.excludes)) return "ignore";
+    // 标准任务目录在 .workbench 里，索引器不读它，但它变了要重算任务。
+    if (rel.startsWith(".workbench/tasks/")) return "file";
+    // 测试结果：索引器不读，但变了要重读；自动跑过程中的 partial/junit.xml 和 .tmp 不算，不然每次自动跑都多一轮「重算 1 个文件」。
+    if (rel.startsWith(".workbench/test-results/")) return TEST_RESULT_FILE.test(rel) ? "tests" : "ignore";
+    if (isExcluded(rel, this.excludes, this.keepDotDirs)) return "ignore";
     return "file";
   }
 
   onFsEvent(rel: string): void {
     const kind = this.classify(rel);
     if (kind === "ignore") return;
+    if (kind === "tests" && this.ownResultsEvent(rel)) return;
     if (kind === "git") this.gitChanged = true;
+    else if (kind === "tests") this.testsChanged = true;
     else this.pending.add(rel);
     this.schedule(this.options.debounceMs ?? 250);
+  }
+
+  /** 这个事件是不是自动跑自己刚写的 results.json（3 秒内；直接通知已经安排了那一轮）。 */
+  private ownResultsEvent(file: string): boolean {
+    return /(^|\/)results\.json$/.test(file) && Date.now() - this.resultsWrittenAt < 3000;
+  }
+
+  /** 攒着还没重算的东西（诊断、测试用）。 */
+  queued(): { files: string[]; git: boolean; tests: boolean } {
+    return { files: [...this.pending].sort(), git: this.gitChanged, tests: this.testsChanged };
   }
 
   private schedule(delay: number): void {
@@ -164,7 +191,9 @@ export class Runtime {
       this.rerun = true;
       return;
     }
-    const reason = this.pendingReason;
+    // 只有测试结果变了、没有别的变化，这一轮才叫 tests；否则按文件 / hook 算，测试结果的变化在 cycle 里另记一条。
+    const onlyTests = this.pendingReason === "files" && this.testsChanged && !this.pending.size && !this.gitChanged;
+    const reason = onlyTests ? "tests" : this.pendingReason;
     this.pendingReason = "files";
     this.running = this.cycle(reason).catch((error: unknown) => {
       this.log(`重算失败：${error instanceof Error ? error.message : String(error)}`);
@@ -189,6 +218,8 @@ export class Runtime {
     this.pending.clear();
     const gitChanged = this.gitChanged || reason === "initial";
     this.gitChanged = false;
+    const testsChanged = this.testsChanged;
+    this.testsChanged = false;
     const result: IndexResult = await this.indexer.run({ deferImporters: reason !== "initial" && reason !== "refine" });
     if (gitChanged || !this.commits.length) {
       this.commits = await readHistory(this.root, { stageTag: result.overlay.stage_tag, ...(this.options.maxCommits ? { max: this.options.maxCommits } : {}) });
@@ -226,7 +257,7 @@ export class Runtime {
       stateDir: this.options.stateDir,
       autoTest: this.autoTester.state(),
     });
-    if (reason === "tests") {
+    if (testsChanged) {
       // 结果文件变了（glassbox test 全量跑，或自动跑的相关测试合并进来了）。
       const r = this.snapshot.tests?.run;
       const p = r?.partial;

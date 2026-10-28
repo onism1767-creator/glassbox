@@ -8,6 +8,9 @@ version: 1
 # 额外排除的路径或 glob（依赖目录、敏感文件已默认排除）
 exclude: []
 
+# 以点开头的目录（数据库数据、缓存、工具状态）默认一律不看；里面真有源码的在这里列出来（.claude、.github 已默认保留）
+# keep_dot_dirs: [.ci, .scripts]
+
 # Python 绝对导入的根目录；留空则自动探测 "." 与 "src"
 # source_roots: [".", "src"]
 

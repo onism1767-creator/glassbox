@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseJunit, parseCoverage, linkTests, classnameToFile, contextResolver, compactCoverage } from "../src/tests.ts";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { parseJunit, parseCoverage, linkTests, classnameToFile, contextResolver, compactCoverage, readTestResults } from "../src/tests.ts";
 import { parseEmojiList } from "../src/tasks.ts";
 import { computeAllProgress, findInconsistencies, computeGauge } from "../src/progress.ts";
 import type { FileEdge } from "../src/types.ts";
@@ -112,4 +115,72 @@ test("任务：测试信号有值，「N 测试全绿」声明与实测对照，
   assert.ok(inc.some((i) => i.taskId === "S1" && i.kind === "完成但相关测试红"));
   const s2 = all.get("S2")!;
   assert.match(s2.signals.find((s) => s.name === "测试")?.text ?? "", /对不上任何测试/);
+});
+
+test("上下文歧义：同名测试模块都有这个函数时几个都算进来，等级降为 T1 并写明原因；模块名写全了不歧义", () => {
+  const xml = `<testsuite><testcase classname="tests.unit.test_a" name="test_same" time="0"/><testcase classname="tests.other.test_a" name="test_same" time="0"/><testcase classname="tests.unit.test_a" name="test_only_unit" time="0"/></testsuite>`;
+  const k = new Set([...known, "tests/other/test_a.py", "app/x.py"]);
+  const run = parseJunit(xml, k, "junit.xml", "x");
+  const files = [...new Set(run.cases.map((c) => c.file!))];
+  const r = contextResolver(run.cases, files);
+  assert.deepEqual(r("test_a.test_same"), ["tests/other/test_a.py::test_same", "tests/unit/test_a.py::test_same"]);
+  assert.equal(r.ambiguous.has("test_a.test_same"), true);
+  assert.deepEqual(r("test_a.test_only_unit"), ["tests/unit/test_a.py::test_only_unit"]);
+  assert.equal(r.ambiguous.has("test_a.test_only_unit"), false);
+  assert.deepEqual(r("tests.unit.test_a.test_same|run"), ["tests/unit/test_a.py::test_same"]);
+  const cov = parseCoverage(
+    JSON.stringify({
+      meta: { show_contexts: true },
+      files: {
+        "app/x.py": { summary: { covered_lines: 1, num_statements: 1, percent_covered: 100 }, contexts: { "1": ["test_a.test_same"] } },
+        "app/service.py": { summary: { covered_lines: 1, num_statements: 1, percent_covered: 100 }, contexts: { "1": ["test_a.test_only_unit"] } },
+      },
+    }),
+    "C:/repo",
+    "c",
+    "x",
+  );
+  const { fileStatus } = linkTests(run, cov, [], ["app/x.py", "app/service.py"]);
+  assert.equal(fileStatus["app/x.py"]!.tier, "T1");
+  assert.equal(fileStatus["app/x.py"]!.related.length, 2);
+  assert.match(fileStatus["app/x.py"]!.note ?? "", /不止一个同名测试模块/);
+  assert.equal(fileStatus["app/service.py"]!.tier, "T0");
+  assert.equal(fileStatus["app/service.py"]!.note, undefined);
+});
+
+test("读结果：results.json 比 junit.xml 新才用；coverage.json 或 results.json 坏了记进 problems，不静默消失", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "glassbox-tr-"));
+  const state = path.join(root, ".workbench");
+  const dir = path.join(state, "test-results");
+  fs.mkdirSync(dir, { recursive: true });
+  try {
+    const junitFile = path.join(dir, "junit.xml");
+    const merged = path.join(dir, "results.json");
+    fs.writeFileSync(junitFile, junit);
+    const one = { version: 1, run: { source: "junit.xml", at: "2026-10-27T10:00:00", total: 1, passed: 1, failed: 0, errors: 0, skipped: 0, cases: [{ id: "tests/unit/test_a.py::test_ok", name: "test_ok", classname: "tests.unit.test_a", file: "tests/unit/test_a.py", status: "passed", durationMs: 1 }] } };
+    fs.writeFileSync(merged, JSON.stringify(one));
+    const older = new Date(Date.now() - 60_000);
+    const now = new Date();
+    fs.utimesSync(junitFile, older, older);
+    fs.utimesSync(merged, now, now);
+    assert.equal(readTestResults(root, state, known, []).run?.total, 1);
+    // 全量跑过一次（junit.xml 更新）：results.json 旧了，不用
+    const later = new Date(Date.now() + 60_000);
+    fs.utimesSync(junitFile, later, later);
+    assert.equal(readTestResults(root, state, known, []).run?.total, 4);
+    // coverage.json 坏了
+    fs.writeFileSync(path.join(dir, "coverage.json"), "{ not json");
+    const c = readTestResults(root, state, known, []);
+    assert.equal(c.coverage, undefined);
+    assert.ok(c.problems.some((p) => /coverage\.json 解析失败/.test(p)), c.problems.join("；"));
+    // results.json 坏了而且比 junit 新
+    fs.writeFileSync(merged, "{ broken");
+    const latest = new Date(Date.now() + 120_000);
+    fs.utimesSync(merged, latest, latest);
+    const d = readTestResults(root, state, known, []);
+    assert.equal(d.run?.total, 4);
+    assert.ok(d.problems.some((p) => /results\.json/.test(p)), d.problems.join("；"));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

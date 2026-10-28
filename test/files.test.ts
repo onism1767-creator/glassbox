@@ -15,3 +15,12 @@ test("排除：数据库数据、缓存、以点开头的非源码目录不看�
   assert.equal(isExcluded(".env", none), true);
   assert.equal(isExcluded("docs/x.md", [globToRegExp("docs/**")]), true);
 });
+
+test("排除：overlay 的 keep_dot_dirs 能把点开头的目录放回来；固定名单里的（.venv）照样不看", () => {
+  const keep = new Set([".ci", ".venv"]);
+  assert.equal(isExcluded(".ci/run.py", []), true);
+  assert.equal(isExcluded(".ci/run.py", [], keep), false);
+  assert.equal(isExcluded("tools/.ci/run.py", [], keep), false);
+  assert.equal(isExcluded(".venv/lib/x.py", [], keep), true);
+  assert.equal(isExcluded(".other/x.py", [], keep), true);
+});

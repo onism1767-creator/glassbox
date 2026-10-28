@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { selectTests, mergeRuns, baseId } from "../src/autotest.ts";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { selectTests, mergeRuns, baseId, AutoTester } from "../src/autotest.ts";
 import { parseJunit, parseCoverage, linkTests, type TestSnapshot } from "../src/tests.ts";
 import type { FileEdge } from "../src/types.ts";
 
@@ -86,4 +89,62 @@ test("合并：删掉的测试文件的旧用例也拿掉", () => {
   const merged = mergeRuns(snap.run, partial, sel, { changed: ["tests/unit/test_b.py"], elapsedMs: 1, exists: () => false });
   assert.equal(merged.cases.some((c) => c.file === "tests/unit/test_b.py"), false);
   assert.equal(merged.total, 5);
+});
+
+/** 假的 pytest：按剧本给退出码，有 xml 就写到 --junitxml 指定的位置。 */
+function fakePytest(script: { code: number; xml?: string }[], calls: string[][]) {
+  return async (_cmd: string, args: string[]): Promise<{ code: number; tail: string }> => {
+    calls.push(args);
+    const step = script.shift() ?? { code: 0, xml: "<testsuite></testsuite>" };
+    const out = args.find((a) => a.startsWith("--junitxml="))?.slice("--junitxml=".length);
+    if (out && step.xml !== undefined) fs.writeFileSync(out, step.xml);
+    return { code: step.code, tail: "" };
+  };
+}
+
+test("自动跑：用例 id 失效（退出码 4）退到按文件跑；两次挨着跑，第二次以自己上次合并的结果为基础，第一次的不丢", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "glassbox-at-"));
+  const state = path.join(root, ".workbench");
+  try {
+    fs.mkdirSync(path.join(root, "tests", "unit"), { recursive: true });
+    for (const f of ["tests/unit/test_a.py", "tests/unit/test_p.py", "tests/unit/test_b.py"]) fs.writeFileSync(path.join(root, f), "");
+    const snap = snapshot(); // 快照固定不动：模拟重算还没跟上
+    const calls: string[][] = [];
+    const events: string[] = [];
+    let results = 0;
+    const runner = fakePytest(
+      [
+        { code: 4 },
+        { code: 0, xml: `<testsuite timestamp="2026-10-27T11:00:00"><testcase classname="tests.unit.test_a" name="test_ok" time="0"/><testcase classname="tests.unit.test_a" name="test_bad" time="0"/><testcase classname="tests.unit.test_p" name="test_many[1]" time="0"/></testsuite>` },
+        { code: 0, xml: `<testsuite timestamp="2026-10-27T11:00:05"><testcase classname="tests.unit.test_b" name="test_skip" time="0"/></testsuite>` },
+      ],
+      calls,
+    );
+    const at = new AutoTester(
+      root,
+      { stateDir: state, python: "py", enabled: true, debounceMs: 0, run: runner },
+      { tests: () => snap, known: () => known, onEvent: (e) => events.push(e.text), onState: () => undefined, onResults: () => { results++; } },
+    );
+    const waitResults = (n: number) => new Promise<void>((resolve) => { const tick = () => (results >= n ? resolve() : setTimeout(tick, 10)); tick(); });
+    const readMerged = () => (JSON.parse(fs.readFileSync(path.join(state, "test-results", "results.json"), "utf8")) as { run: { fullAt?: string; cases: { name: string; status: string }[]; partial?: { granularity: string } } }).run;
+
+    at.notice(["app/service.py"]);
+    await waitResults(1);
+    assert.ok(calls[0]!.some((a) => a.includes("::")), "第一次按用例 id 跑");
+    assert.deepEqual(calls[1]!.filter((a) => a.endsWith(".py")), ["tests/unit/test_a.py", "tests/unit/test_p.py"], "退出码 4 后按文件重跑");
+    const first = readMerged();
+    assert.equal(first.cases.find((c) => c.name === "test_bad")?.status, "passed");
+    assert.equal(first.partial?.granularity, "file");
+    assert.ok(events.some((t) => /自动跑相关测试/.test(t)));
+
+    at.notice(["tests/unit/test_b.py"]);
+    await waitResults(2);
+    const second = readMerged();
+    assert.equal(second.cases.find((c) => c.name === "test_bad")?.status, "passed", "第一次合并的结果没被旧快照盖掉");
+    assert.equal(second.cases.find((c) => c.name === "test_skip")?.status, "passed");
+    assert.equal(second.fullAt, "2026-10-27T10:00:00");
+    at.stop();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

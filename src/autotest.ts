@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseJunit, type TestRun, type TestSnapshot, type TestCase, type AutoTestState, type PartialRun } from "./tests.ts";
-import { runCommand, moduleAvailable } from "./runtests.ts";
+import { runCommand, probeModule } from "./runtests.ts";
 import type { ActivityEvent, Tier } from "./types.ts";
 
 export interface SelectionItem {
@@ -82,7 +82,7 @@ export function selectTests(changed: string[], tests: TestSnapshot | undefined, 
     if (st && st.related.length) {
       const own = [...new Set(st.related.map(baseId))].sort();
       for (const id of own) ids.add(id);
-      items.push({ path: p, how: st.tier === "T0" ? "覆盖率上下文说这些测试跑过它" : "测试文件 import 了它", tier: st.tier, args: own });
+      items.push({ path: p, how: st.tier === "T0" ? "覆盖率上下文说这些测试跑过它" : st.note ? "覆盖率上下文有歧义，同名测试模块的都算" : "测试文件 import 了它", tier: st.tier, args: own });
       continue;
     }
     skipped.push({ path: p, why: "还不知道哪些测试和它相关（没有覆盖率上下文，也没有测试文件 import 它）" });
@@ -147,6 +147,8 @@ export interface AutoTestOptions {
   debounceMs?: number;
   timeoutMs?: number;
   log?: (line: string) => void;
+  /** 跑命令的函数；测试里换成假的。 */
+  run?: typeof runCommand;
 }
 
 export interface AutoTestHooks {
@@ -169,6 +171,8 @@ export class AutoTester {
   private why: string | undefined;
   private enabled: boolean;
   private readonly log: (line: string) => void;
+  /** 自己最近一次合并出的结果。快照要等重算才更新，两次自动跑挨得近时以它为准，免得第一次的结果被盖掉。 */
+  private lastMerged: TestRun | undefined;
 
   constructor(root: string, options: AutoTestOptions, hooks: AutoTestHooks) {
     this.root = root;
@@ -183,10 +187,10 @@ export class AutoTester {
   /** 启动时确认解释器里有 pytest；没有就关掉并说明。 */
   async probe(): Promise<AutoTestState> {
     if (this.enabled && this.options.python) {
-      const ok = await moduleAvailable(this.options.python, "pytest", this.root);
-      if (!ok) {
+      const r = await probeModule(this.options.python, "pytest", this.root);
+      if (r !== "ok") {
         this.enabled = false;
-        this.why = `${this.options.python} 里没有 pytest`;
+        this.why = r === "no-interpreter" ? `找不到 Python 解释器 ${this.options.python}（overlay 的 test_results.python 写错了？）` : `${this.options.python} 里没有 pytest`;
       }
     }
     const s = this.state();
@@ -229,6 +233,15 @@ export class AutoTester {
       this.timer = null;
       void this.flush();
     }, delay);
+  }
+
+  /** 合并的基础：自己上次合并的结果通常比快照新（快照要等重算）；全量跑过之后快照里的更新，以时间为准。 */
+  previousRun(): TestRun | undefined {
+    const snap = this.hooks.tests()?.run;
+    const mine = this.lastMerged;
+    if (!mine) return snap;
+    if (!snap) return mine;
+    return Date.parse(snap.at) > Date.parse(mine.at) ? snap : mine;
   }
 
   private async flush(): Promise<void> {
@@ -275,7 +288,8 @@ export class AutoTester {
       text: `自动跑相关测试：${selection.estimated ? `约 ${selection.estimated} 个用例` : `${selection.args.length} 个目标`}（${describe(selection)}）…`,
     });
     const env = { ...process.env, PYTHONDONTWRITEBYTECODE: "1" };
-    const pytest = (args: string[]) => runCommand(python, ["-m", "pytest", "-p", "no:cacheprovider", "-q", `--junitxml=${junit}`, ...args], this.root, env, (l) => this.log(l), this.options.timeoutMs ?? 600_000);
+    const run = this.options.run ?? runCommand;
+    const pytest = (args: string[]) => run(python, ["-m", "pytest", "-p", "no:cacheprovider", "-q", `--junitxml=${junit}`, ...args], this.root, env, (l) => this.log(l), this.options.timeoutMs ?? 600_000);
     fs.rmSync(junit, { force: true });
     let r = await pytest(selection.args);
     if (r.code === 4 && selection.granularity === "case") {
@@ -292,12 +306,13 @@ export class AutoTester {
     }
     const known = this.hooks.known();
     const partial = parseJunit(fs.readFileSync(junit, "utf8"), known, "partial/junit.xml", new Date().toISOString());
-    const previous = this.hooks.tests()?.run;
+    const previous = this.previousRun();
     const merged = mergeRuns(previous, partial, selection, { changed, elapsedMs, exists });
     const out = path.join(this.options.stateDir, "test-results", "results.json");
     const tmp = out + ".tmp";
     fs.writeFileSync(tmp, JSON.stringify({ version: 1, run: merged }), "utf8");
     fs.renameSync(tmp, out);
+    this.lastMerged = merged;
     this.log(`自动跑了 ${partial.total} 个用例：通过 ${partial.passed}、失败 ${partial.failed + partial.errors}、跳过 ${partial.skipped}，${(elapsedMs / 1000).toFixed(1)} 秒`);
     this.hooks.onResults();
   }

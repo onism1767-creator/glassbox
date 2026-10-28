@@ -1,4 +1,5 @@
 import type { Snapshot } from "../../src/snapshot.ts";
+import type { TestCase } from "../../src/tests.ts";
 import type { FileRecord, SymbolRecord, CallEdge, FileEdge, Violation, AllowedEdge, ChangeRecord, UnresolvedCall, Touch } from "../../src/types.ts";
 import { WORDS, dirLabel, dirShort, layerLabel, layerBadge, kindWord, changeWord, type Names, EMPTY_NAMES } from "./words.ts";
 
@@ -102,8 +103,12 @@ export class SnapshotIndex {
   readonly topDirs: string[];
   readonly touched: Record<string, Touch>;
   readonly names: Names;
+  readonly s: Snapshot;
+  /** 测试用例按 id 查，懒建一次。 */
+  private testCaseById: Map<string, TestCase> | null = null;
 
-  constructor(readonly s: Snapshot) {
+  constructor(s: Snapshot) {
+    this.s = s;
     this.touched = s.activity?.touched ?? {};
     this.names = s.names ? { layers: s.names.layers, dirs: s.names.dirs } : EMPTY_NAMES;
     for (const f of s.files) {
@@ -193,7 +198,12 @@ export class SnapshotIndex {
     return this.s.edges.filter((e) => topDir(e.from) === from && topDir(e.to) === to);
   }
 
-  /** 一组文件的测试徽章：有失败就红；否则给覆盖率或相关测试数。 */
+  testCase(id: string): TestCase | undefined {
+    if (!this.testCaseById) this.testCaseById = new Map((this.s.tests?.run?.cases ?? []).map((c) => [c.id, c]));
+    return this.testCaseById.get(id);
+  }
+
+  /** 一组文件的测试徽章：有失败就红；否则给覆盖率或相关测试数。同一个测试跑过几个文件只算一次。 */
   testBadge(paths: string[]): GNode["badges"][number] | undefined {
     const t = this.s.tests;
     if (!t?.run) return undefined;
@@ -208,9 +218,11 @@ export class SnapshotIndex {
       for (const id of st.related) {
         if (seen.has(id)) continue;
         seen.add(id);
+        const c = this.testCase(id);
+        if (!c) continue;
+        if (c.status === "failed" || c.status === "error") failed++;
+        else if (c.status === "passed") passed++;
       }
-      failed += st.failed + st.errors;
-      passed += st.passed;
       if (st.coverage && st.coverage.total > 0) {
         covSum += st.coverage.percent;
         covN++;

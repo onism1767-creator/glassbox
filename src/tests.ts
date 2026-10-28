@@ -64,6 +64,8 @@ export interface CoverageData {
   source: string;
   at: string;
   hasContexts: boolean;
+  /** 覆盖率按哪份配置算的（glassbox test 写进 meta；项目自己的配置或 glassbox 缺省）。 */
+  config?: string;
   totalPercent: number;
   files: Record<string, CoverageFile>;
   /** 源文件 → 跑过它的测试 id（只有 hasContexts 时有）。 */
@@ -79,6 +81,8 @@ export interface FileTestStatus {
   skipped: number;
   /** related 是怎么来的：coverage 上下文（T0）还是 import 图推断（T1）。 */
   tier: Tier;
+  /** 等级不是 T0 时的原因说明（比如上下文对上了不止一个同名测试模块）。 */
+  note?: string;
   coverage?: CoverageFile;
 }
 
@@ -166,7 +170,7 @@ export function parseJunit(xml: string, known: Set<string>, source: string, fall
 }
 
 interface CoverageJson {
-  meta?: { timestamp?: string; show_contexts?: boolean };
+  meta?: { timestamp?: string; show_contexts?: boolean; config?: string };
   files?: Record<string, { summary?: { covered_lines?: number; num_statements?: number; percent_covered?: number }; contexts?: Record<string, string[]>; tests?: string[] }>;
   totals?: { percent_covered?: number };
   /** glassbox 自己压过的格式：每个文件只留摘要和「跑过它的测试」集合。 */
@@ -195,6 +199,7 @@ export function parseCoverage(text: string, root: string, source: string, fallba
     source,
     at: json.meta?.timestamp ?? fallbackAt,
     hasContexts: Boolean(json.meta?.show_contexts) || Object.keys(coveredBy).length > 0,
+    ...(json.meta?.config ? { config: json.meta.config } : {}),
     totalPercent: Math.round((json.totals?.percent_covered ?? 0) * 10) / 10,
     files,
     coveredBy,
@@ -202,7 +207,7 @@ export function parseCoverage(text: string, root: string, source: string, fallba
 }
 
 /** 把 coverage json（带上下文时动辄几十 MB）压成只含摘要和「跑过它的测试」集合的小文件。 */
-export function compactCoverage(text: string): string {
+export function compactCoverage(text: string, extra: { config?: string } = {}): string {
   const json = JSON.parse(text) as CoverageJson;
   const files: Record<string, { summary: { covered_lines: number; num_statements: number; percent_covered: number }; tests: string[] }> = {};
   for (const [p, info] of Object.entries(json.files ?? {})) {
@@ -215,7 +220,8 @@ export function compactCoverage(text: string): string {
     for (const id of info.tests ?? []) if (id) ids.add(id);
     files[p] = { summary: { covered_lines: s.covered_lines ?? 0, num_statements: s.num_statements ?? 0, percent_covered: s.percent_covered ?? 0 }, tests: [...ids].sort() };
   }
-  return JSON.stringify({ compact: true, meta: { timestamp: json.meta?.timestamp, show_contexts: Boolean(json.meta?.show_contexts) }, totals: { percent_covered: json.totals?.percent_covered ?? 0 }, files });
+  const config = extra.config ?? json.meta?.config;
+  return JSON.stringify({ compact: true, meta: { timestamp: json.meta?.timestamp, show_contexts: Boolean(json.meta?.show_contexts), ...(config ? { config } : {}) }, totals: { percent_covered: json.totals?.percent_covered ?? 0 }, files });
 }
 
 /**
@@ -224,7 +230,13 @@ export function compactCoverage(text: string): string {
  *   没有目录、没有参数化的 [..]，所以一个上下文可能对应多个参数化用例；
  * - pytest-cov 的 --cov-context=test 记 pytest 的 node id，像 tests/unit/test_resolve.py::test_x[a]|run。
  */
-export function contextResolver(cases: TestCase[], testFiles: string[]): (ctx: string) => string[] {
+export interface ContextResolver {
+  (ctx: string): string[];
+  /** 对上了不止一个同名测试模块的上下文（去掉 |run 后缀）；这些的归属不确定，几个都算了进去。 */
+  ambiguous: Set<string>;
+}
+
+export function contextResolver(cases: TestCase[], testFiles: string[]): ContextResolver {
   const byBase = new Map<string, string[]>();
   for (const c of cases) {
     const base = c.id.replace(/\[.*\]$/, "");
@@ -233,7 +245,8 @@ export function contextResolver(cases: TestCase[], testFiles: string[]): (ctx: s
   const moduleOf = (f: string) => f.replace(/\.py$/, "").replace(/\/__init__$/, "").split("/").join(".");
   const modules = testFiles.map((f) => ({ f, m: moduleOf(f) }));
   const memo = new Map<string, string[]>();
-  return (raw) => {
+  const ambiguous = new Set<string>();
+  const resolve = ((raw: string) => {
     const ctx = raw.split("|")[0]?.trim() ?? "";
     if (!ctx) return [];
     const hit = memo.get(ctx);
@@ -243,22 +256,24 @@ export function contextResolver(cases: TestCase[], testFiles: string[]): (ctx: s
       out = byBase.get(normalizePath(ctx).replace(/\[.*\]$/, "")) ?? [];
     } else {
       const parts = ctx.split(".");
-      outer: for (let k = parts.length - 1; k >= 1; k--) {
+      for (let k = parts.length - 1; k >= 1 && !out.length; k--) {
         const mod = parts.slice(0, k).join(".");
         const rest = parts.slice(k).join("::");
-        for (const { f, m } of modules) {
-          if (m !== mod && !m.endsWith("." + mod)) continue;
-          const ids = byBase.get(`${f}::${rest}`);
-          if (ids) {
-            out = ids;
-            break outer;
-          }
+        // 模块名完全相等的优先；只有后缀相同（tests.unit.test_a 对 test_a）的才会出现歧义。
+        const exact = modules.filter(({ m }) => m === mod);
+        const pool = exact.length ? exact : modules.filter(({ m }) => m.endsWith("." + mod));
+        const hits = pool.map(({ f }) => byBase.get(`${f}::${rest}`)).filter((ids): ids is string[] => !!ids);
+        if (hits.length) {
+          out = [...new Set(hits.flat())].sort();
+          if (hits.length > 1) ambiguous.add(ctx);
         }
       }
     }
     memo.set(ctx, out);
     return out;
-  };
+  }) as ContextResolver;
+  resolve.ambiguous = ambiguous;
+  return resolve;
 }
 
 /** 把测试结果挂到源文件上：有覆盖率上下文用上下文（T0），否则按「测试文件 import 了谁」推断（T1）。 */
@@ -294,7 +309,11 @@ export function linkTests(run: TestRun | undefined, coverage: CoverageData | und
     if (viaContext && viaContext.length) {
       const ids = [...new Set(viaContext.flatMap(resolve))].sort();
       if (ids.length) {
-        fileStatus[f] = tally(ids, "T0", cov);
+        // 上下文对上了不止一个同名测试模块：几个都算进来，但归属不确定，等级降为推导。
+        const unsure = viaContext.map((c) => c.split("|")[0]?.trim() ?? "").filter((c) => resolve.ambiguous.has(c));
+        const st = tally(ids, unsure.length ? "T1" : "T0", cov);
+        if (unsure.length) st.note = `覆盖率上下文 ${unsure.slice(0, 2).join("、")}${unsure.length > 2 ? " 等" : ""} 对上了不止一个同名测试模块，几个都算了进来`;
+        fileStatus[f] = st;
         continue;
       }
     }
@@ -327,14 +346,26 @@ export function locateTestResults(root: string, stateDir: string, configured: Te
 }
 
 const cache = new Map<string, { mtimeMs: number; value: unknown }>();
+/** 按 mtime 缓存解析结果。文件读不了 → undefined；解析本身抛错 → 原样抛出去，让调用方记进 problems。 */
 function cached<T>(file: string, load: (text: string, at: string) => T): T | undefined {
+  let st: fs.Stats;
+  let text: string;
   try {
-    const st = fs.statSync(file);
+    st = fs.statSync(file);
     const hit = cache.get(file);
     if (hit && hit.mtimeMs === st.mtimeMs) return hit.value as T;
-    const value = load(fs.readFileSync(file, "utf8"), st.mtime.toISOString());
-    cache.set(file, { mtimeMs: st.mtimeMs, value });
-    return value;
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return undefined;
+  }
+  const value = load(text, st.mtime.toISOString());
+  cache.set(file, { mtimeMs: st.mtimeMs, value });
+  return value;
+}
+
+function mtimeOf(file: string): number | undefined {
+  try {
+    return fs.statSync(file).mtimeMs;
   } catch {
     return undefined;
   }
@@ -361,29 +392,37 @@ export function readTestResults(root: string, stateDir: string, known: Set<strin
   }
   // 自动跑相关测试会把合并后的结果写成 results.json；它比 junit.xml 新就用它（全量跑一次又会把它盖过去）。
   const merged = path.join(stateDir, "test-results", "results.json");
-  if (fs.existsSync(merged)) {
-    const newer = !where.junit || fs.statSync(merged).mtimeMs >= fs.statSync(where.junit).mtimeMs;
+  const mergedAt = mtimeOf(merged);
+  if (mergedAt !== undefined) {
+    const junitAt = where.junit ? mtimeOf(where.junit) : undefined;
+    const newer = junitAt === undefined || mergedAt >= junitAt;
     if (newer) {
-      const m = cached(merged, (text) => {
-        const parsed = JSON.parse(text) as { version?: number; run?: TestRun };
-        return parsed.version === 1 && parsed.run && Array.isArray(parsed.run.cases) ? parsed.run : undefined;
-      });
-      if (m) run = m;
-      else problems.push("results.json 格式不对，忽略了");
+      try {
+        const m = cached(merged, (text) => {
+          const parsed = JSON.parse(text) as { version?: number; run?: TestRun };
+          return parsed.version === 1 && parsed.run && Array.isArray(parsed.run.cases) ? parsed.run : undefined;
+        });
+        if (m) run = m;
+        else problems.push("results.json 格式不对，忽略了");
+      } catch (error) {
+        problems.push(`results.json 读不了，忽略了：${error instanceof Error ? error.message : String(error)}`);
+      }
     }
   }
   if (where.coverage) {
     try {
       coverage = cached(where.coverage, (text, at) => parseCoverage(text, root, rel(where.coverage!), at));
+      if (!coverage) problems.push(`读不了 ${rel(where.coverage)}`);
     } catch (error) {
-      problems.push(`coverage.json 解析失败：${error instanceof Error ? error.message : String(error)}`);
+      coverage = undefined;
+      problems.push(`${rel(where.coverage)} 解析失败，这次没有覆盖率：${error instanceof Error ? error.message : String(error)}`);
     }
   }
   const { fileStatus, testFiles } = linkTests(run, coverage, edges, [...known]);
   const howTo = "跑一次 glassbox test <仓库>，或自己跑 pytest --junitxml=.workbench/test-results/junit.xml（加 coverage json --show-contexts 更好）";
   return {
     ...(run ? { run } : {}),
-    ...(coverage ? { coverage: { source: coverage.source, at: coverage.at, hasContexts: coverage.hasContexts, totalPercent: coverage.totalPercent, files: coverage.files } } : {}),
+    ...(coverage ? { coverage: { source: coverage.source, at: coverage.at, hasContexts: coverage.hasContexts, ...(coverage.config ? { config: coverage.config } : {}), totalPercent: coverage.totalPercent, files: coverage.files } } : {}),
     fileStatus,
     testFiles,
     problems,

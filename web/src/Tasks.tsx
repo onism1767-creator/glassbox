@@ -1,12 +1,9 @@
 import { useState } from "react";
 import type { SnapshotIndex } from "./model.ts";
-import { statusWord, tierText } from "./words.ts";
+import { statusWord } from "./words.ts";
+import { Tier } from "./Tier.tsx";
 import type { TaskRecord } from "../../src/tasks.ts";
 import type { TaskProgress } from "../../src/progress.ts";
-
-function Tier({ t }: { t: string }) {
-  return <span className={`tier ${t}`} title={tierText(t)}>{tierText(t)}</span>;
-}
 
 function Bar({ p }: { p?: TaskProgress }) {
   if (!p || p.percent === undefined) return <div className="bar none" title="没有机器可见的信号，不画进度条">没有进度数据</div>;

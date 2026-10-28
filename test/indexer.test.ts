@@ -72,7 +72,7 @@ test("活动日志：追加、读回、最近触碰", () => {
   assert.deepEqual(Object.keys(reloaded.touched()), ["app/service.py"]);
 });
 
-test("运行时事件归类：git 元数据、源码、忽略", () => {
+test("运行时事件归类：git 元数据、源码、测试结果、忽略；测试结果变了不算文件改动", async () => {
   const rt = new Runtime(repo, { stateDir: state, overlayFile: path.join(fixtures, "mini-py-overlay.yaml"), precise: false, log: () => undefined });
   assert.equal(rt.classify(".git/HEAD"), "git");
   assert.equal(rt.classify(".git/refs/heads/main"), "git");
@@ -81,4 +81,19 @@ test("运行时事件归类：git 元数据、源码、忽略", () => {
   assert.equal(rt.classify("app/service.py"), "file");
   assert.equal(rt.classify(".workbench/snapshot.json"), "ignore");
   assert.equal(rt.classify("node_modules/x/index.js"), "ignore");
+  assert.equal(rt.classify(".workbench/tasks/a.md"), "file");
+  // 测试结果目录：只认顶层写好的 .xml / .json；自动跑过程中的 partial/ 和 .tmp 不算
+  assert.equal(rt.classify(".workbench/test-results/junit.xml"), "tests");
+  assert.equal(rt.classify(".workbench/test-results/coverage.json"), "tests");
+  assert.equal(rt.classify(".workbench/test-results/results.json"), "tests");
+  assert.equal(rt.classify(".workbench/test-results/results.json.tmp"), "ignore");
+  assert.equal(rt.classify(".workbench/test-results/partial/junit.xml"), "ignore");
+  assert.equal(rt.classify(".workbench/test-results/coveragerc"), "ignore");
+  rt.onFsEvent(".workbench/test-results/results.json");
+  rt.onFsEvent(".workbench/test-results/partial/junit.xml");
+  rt.onFsEvent(".workbench/test-results/results.json.tmp");
+  assert.deepEqual(rt.queued(), { files: [], git: false, tests: true });
+  rt.onFsEvent("app/service.py");
+  assert.deepEqual(rt.queued(), { files: ["app/service.py"], git: false, tests: true });
+  await rt.stop();
 });

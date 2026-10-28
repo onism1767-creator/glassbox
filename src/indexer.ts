@@ -88,12 +88,13 @@ export class Indexer {
     const started = Date.now();
     const overlay = readOverlay(this.root, this.options.overlayFile);
     const extra = overlay.exclude.map(globToRegExp);
+    const keepDotDirs = new Set(overlay.keep_dot_dirs ?? []);
     const { files: candidates, viaGit } = await listCandidates(this.root);
     const base = await fs.realpath(this.root);
     const seen = new Set<string>();
     const changed: string[] = [];
     for (const rel of [...new Set(candidates)].sort()) {
-      if (path.isAbsolute(rel) || rel.split("/").includes("..") || isExcluded(rel, extra)) continue;
+      if (path.isAbsolute(rel) || rel.split("/").includes("..") || isExcluded(rel, extra, keepDotDirs)) continue;
       const full = path.join(base, rel);
       let stat;
       try {

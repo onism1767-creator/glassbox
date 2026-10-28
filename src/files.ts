@@ -48,11 +48,17 @@ export function globToRegExp(pattern: string): RegExp {
   return new RegExp((p.includes("/") ? "^" : "(?:^|/)") + escaped + "(?:/|$)");
 }
 
-export function isExcluded(rel: string, extra: RegExp[]): boolean {
+const NO_EXTRA_DOT_DIRS: ReadonlySet<string> = new Set();
+
+/**
+ * @param extra overlay 的 exclude 规则
+ * @param keepDotDirs overlay 的 keep_dot_dirs：以点开头但要看的目录名（固定排除名单优先）
+ */
+export function isExcluded(rel: string, extra: RegExp[], keepDotDirs: ReadonlySet<string> = NO_EXTRA_DOT_DIRS): boolean {
   const segs = rel.split("/");
   if (segs.some((seg) => EXCLUDED_DIRS.has(seg))) return true;
   // 目录段（最后一段是文件名，不算）以点开头且不在保留名单里：排除。
-  if (segs.slice(0, -1).some((seg) => seg.startsWith(".") && !DOT_DIRS_KEPT.has(seg))) return true;
+  if (segs.slice(0, -1).some((seg) => seg.startsWith(".") && !DOT_DIRS_KEPT.has(seg) && !keepDotDirs.has(seg))) return true;
   if (SENSITIVE.test(rel)) return true;
   return extra.some((rx) => rx.test(rel));
 }
@@ -85,15 +91,16 @@ export interface IndexedFiles {
   skipped: string[];
 }
 
-export async function indexFiles(root: string, excludePatterns: string[] = []): Promise<IndexedFiles> {
+export async function indexFiles(root: string, excludePatterns: string[] = [], keepDotDirs: string[] = []): Promise<IndexedFiles> {
   const extra = excludePatterns.map(globToRegExp);
+  const keep = new Set(keepDotDirs);
   const { files: candidates, viaGit } = await listCandidates(root);
   const files: FileRecord[] = [];
   const contents = new Map<string, string>();
   const skipped: string[] = [];
   const base = await fs.realpath(root);
   for (const rel of [...new Set(candidates)].sort()) {
-    if (path.isAbsolute(rel) || rel.split("/").includes("..") || isExcluded(rel, extra)) continue;
+    if (path.isAbsolute(rel) || rel.split("/").includes("..") || isExcluded(rel, extra, keep)) continue;
     const full = path.join(base, rel);
     let stat;
     try {
