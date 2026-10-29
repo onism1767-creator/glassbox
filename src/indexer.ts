@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { readOverlay, type Overlay } from "./config.ts";
-import { listCandidates, isExcluded, globToRegExp, LANGUAGES, MAX_PARSE_BYTES } from "./files.ts";
+import { listCandidates, isExcluded, globToRegExp, contentHash, LANGUAGES, MAX_PARSE_BYTES } from "./files.ts";
 import { grammarFor, type GrammarName } from "./parser.ts";
 import { extractRawImports, resolveImports, buildFileEdges, detectPythonRoots, pythonTopLevelNames, readTsPaths, type RawImport } from "./imports.ts";
 import { buildRules, checkRules } from "./rules.ts";
@@ -57,7 +57,8 @@ export interface IndexResult {
   architectureSource?: { file: string; text: string; ignore: string[] };
 }
 
-function symbolHash(lines: string[], startLine: number, endLine: number): string {
+/** 函数或类自己那几行源码的哈希。lines 要按 \r?\n 切好（E-040：换行符不算内容）。 */
+export function symbolHash(lines: string[], startLine: number, endLine: number): string {
   return createHash("sha1").update(lines.slice(startLine - 1, endLine).join("\n")).digest("hex");
 }
 
@@ -118,12 +119,14 @@ export class Indexer {
       const cached = this.cache.get(rel);
       if (cached && cached.mtimeMs === stat.mtimeMs && cached.record.size === stat.size) continue;
       const buffer = await fs.readFile(full);
-      const hash = createHash("sha256").update(buffer).digest("hex");
+      const binary = buffer.subarray(0, 8000).includes(0);
+      const hash = contentHash(buffer, binary);
       if (cached && cached.record.hash === hash) {
+        // 只是换行符变了（或者 touch 了一下）：内容没变，不算改动；大小记成现在的，免得每轮都重读
         cached.mtimeMs = stat.mtimeMs;
+        cached.record.size = buffer.length;
         continue;
       }
-      const binary = buffer.subarray(0, 8000).includes(0);
       const ext = path.extname(rel).toLowerCase();
       const language = binary ? "binary" : (LANGUAGES[ext] ?? "other");
       const record: FileRecord = { path: rel, dir: path.posix.dirname(rel), size: buffer.length, hash, language, binary };
@@ -135,7 +138,7 @@ export class Indexer {
           entry.raw = await extractRawImports(rel, content, grammar);
           entry.symbols = await extractFileSymbols(rel, content, grammar);
           // 每个函数或类自己的源码哈希：标注绑定到它，它变了标注才过时。
-          const lines = content.split("\n");
+          const lines = content.split(/\r?\n/);
           for (const s of entry.symbols) s.hash = symbolHash(lines, s.startLine, s.endLine);
           entry.entries = extractEntryPoints(rel, content, record.language);
           entry.sites = await extractCallSites(rel, content, grammar);

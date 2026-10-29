@@ -97,3 +97,38 @@ test("运行时事件归类：git 元数据、源码、测试结果、忽略；�
   assert.deepEqual(rt.queued(), { files: ["app/service.py"], git: false, tests: true });
   await rt.stop();
 });
+
+test("换行符不算内容（E-040）：LF 存成 CRLF 后文件和函数哈希不变、不算改动；真改了照样认出来", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "glassbox-eol-"));
+  try {
+    const file = path.join(dir, "mod.py");
+    const lf = 'def greet(name):\n    """打招呼"""\n    return "hi " + name\n\n\nclass Box:\n    def open(self):\n        return 1\n';
+    fs.writeFileSync(file, lf, "utf8");
+    const indexer = new Indexer(dir, { precise: false });
+    const first = await indexer.run();
+    const hashes = (r: typeof first) => ({ file: r.files.find((f) => f.path === "mod.py")?.hash, syms: Object.fromEntries(r.symbols.map((s) => [s.id, s.hash])) });
+    const before = hashes(first);
+    assert.ok(before.file && before.syms["mod.py::greet"] && before.syms["mod.py::Box.open"]);
+
+    fs.writeFileSync(file, lf.replace(/\n/g, "\r\n"), "utf8");
+    const second = await indexer.run();
+    assert.deepEqual(second.changedFiles, [], "只换了换行符不该算改动");
+    assert.deepEqual(hashes(second), before);
+
+    // 新开一个索引器从 CRLF 起步，算出来也一样（标注写在哪种换行下都能对上）
+    const fresh = new Indexer(dir, { precise: false });
+    assert.deepEqual(hashes(await fresh.run()), before);
+    await fresh.close();
+
+    fs.writeFileSync(file, lf.replace("hi ", "hello ").replace(/\n/g, "\r\n"), "utf8");
+    const third = await indexer.run();
+    assert.deepEqual(third.changedFiles, ["mod.py"]);
+    const after = hashes(third);
+    assert.notEqual(after.file, before.file);
+    assert.notEqual(after.syms["mod.py::greet"], before.syms["mod.py::greet"]);
+    assert.equal(after.syms["mod.py::Box.open"], before.syms["mod.py::Box.open"], "同文件别的函数没变");
+    await indexer.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

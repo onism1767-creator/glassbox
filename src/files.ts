@@ -84,6 +84,15 @@ export async function listCandidates(root: string): Promise<{ files: string[]; v
   }
 }
 
+/**
+ * 文件内容哈希，换行符统一成 \n 再算（E-040）：被观测仓库开着 core.autocrlf 时，同一份内容在工作区里
+ * 一会儿 CRLF 一会儿 LF，只看字节就会把没改过的文件和它的标注、旅程都判成"变了"。二进制文件按原字节。
+ */
+export function contentHash(buffer: Buffer, binary: boolean): string {
+  const bytes = !binary && buffer.includes("\r\n") ? Buffer.from(buffer.toString("latin1").replace(/\r\n/g, "\n"), "latin1") : buffer;
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
 export interface IndexedFiles {
   files: FileRecord[];
   contents: Map<string, string>;
@@ -118,7 +127,7 @@ export async function indexFiles(root: string, excludePatterns: string[] = [], k
       path: rel,
       dir: path.posix.dirname(rel),
       size: buffer.length,
-      hash: createHash("sha256").update(buffer).digest("hex"),
+      hash: contentHash(buffer, binary),
       language,
       binary,
     });
