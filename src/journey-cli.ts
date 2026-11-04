@@ -134,11 +134,9 @@ export async function journeyCommand(sub: string, root: string, o: JourneyCliOpt
     return;
   }
   if (sub === "skill") {
-    const src = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "skills", "glassbox-journey", "SKILL.md");
-    const dst = path.join(root, ".claude", "skills", "glassbox-journey", "SKILL.md");
-    fs.mkdirSync(path.dirname(dst), { recursive: true });
-    fs.copyFileSync(src, dst);
-    o.out(`已装到 ${dst}\n`);
+    const { installSkill } = await import("./skill-install.ts");
+    const dst = installSkill("glassbox-journey", root, { stateDir: o.stateDir, port: o.port, ...(o.overlayFile ? { overlayFile: o.overlayFile } : {}) });
+    o.out(`已装到 ${dst}（开头写明了这台机器上怎么调用、状态目录在哪）\n`);
     return;
   }
   throw new Error("用法: glassbox journey list|set|verify|entries|skill [仓库]");

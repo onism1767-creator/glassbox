@@ -145,11 +145,9 @@ export async function annotate(sub: string, root: string, o: AnnotateOptions): P
     return;
   }
   if (sub === "skill") {
-    const src = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "skills", "glassbox-annotate", "SKILL.md");
-    const dst = path.join(root, ".claude", "skills", "glassbox-annotate", "SKILL.md");
-    fs.mkdirSync(path.dirname(dst), { recursive: true });
-    fs.copyFileSync(src, dst);
-    o.out(`已装到 ${dst}\n新开的 Claude Code 会话里说"给画布写标注"就会用它。\n`);
+    const { installSkill } = await import("./skill-install.ts");
+    const dst = installSkill("glassbox-annotate", root, { stateDir: o.stateDir, port: o.port, ...(o.overlayFile ? { overlayFile: o.overlayFile } : {}) });
+    o.out(`已装到 ${dst}（开头写明了这台机器上怎么调用、状态目录在哪）\n新开的 Claude Code 会话里说"给画布写标注"就会用它。\n`);
     return;
   }
   throw new Error("用法: glassbox annotate todo|set|show|skill [仓库]");
