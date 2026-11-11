@@ -31,6 +31,7 @@ const help = `glassbox · 画布是代码的函数
                                              还没标或已过时的节点，带哈希和上下文，给 AI 写人话标注用
   glassbox annotate set [仓库] --file 批.json [--author 名字]   交一批标注（逐条校验：节点存在、依据在节点里、哈希是现在的）
   glassbox annotate show [仓库] [--stale] [--json]             现有标注与状态
+  glassbox annotate prune [仓库] [--dry-run]                  删掉"没对象"的标注（节点已经不在画布上的）
   glassbox annotate skill [仓库]              把"写标注"的 skill 装进仓库的 .claude/skills/
   glassbox journey list [仓库] [--json]       旅程：每条的静态连通（T1）与动态验证（T3）状态
   glassbox journey set [仓库] --file 批.json [--author 名字]    交一批旅程假设（入口 + 有序步骤 + 验证用的测试）
@@ -199,6 +200,7 @@ async function main(): Promise<void> {
         ...(option("file") ? { input: path.resolve(option("file")!) } : {}),
         author: option("author") ?? "ai",
         staleOnly: flag("stale"),
+        dryRun: flag("dry-run"),
         out: (t) => process.stdout.write(t),
       });
       return;

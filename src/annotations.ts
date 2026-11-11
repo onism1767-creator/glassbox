@@ -373,3 +373,15 @@ export function lineCounter(root: string): (p: string) => number | undefined {
     return n;
   };
 }
+
+/**
+ * 清理"没对象"的标注：节点已经不在画布上（文件删了、函数改名了），留着只会在面板里占一行"没对象"。
+ * exists 说一个节点现在在不在；dryRun 只报不删。改了名的，先用 annotate set 给新节点写一条，再来清旧的。
+ */
+export function pruneOrphans(stateDir: string, exists: (node: string) => boolean, dryRun = false): { removed: Annotation[]; kept: number; file: string } {
+  const { items } = readAnnotations(stateDir);
+  const removed = items.filter((a) => !exists(a.node));
+  const kept = items.filter((a) => exists(a.node));
+  const file = dryRun || !removed.length ? annotationsPath(stateDir) : writeAnnotations(stateDir, kept);
+  return { removed, kept: kept.length, file };
+}

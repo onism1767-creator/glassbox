@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { indexRepository, type IndexOptions } from "./index.ts";
-import { annotationSnapshot, annotationTodo, applyAnnotations, lineCounter, readAnnotations, HOW_TO, type AnnotationSnapshot, type ApplyResult, type NodeWorld, type TodoItem, type TodoOptions } from "./annotations.ts";
+import { annotationSnapshot, annotationTodo, applyAnnotations, lineCounter, nodeTable, pruneOrphans, readAnnotations, HOW_TO, type AnnotationSnapshot, type ApplyResult, type NodeWorld, type TodoItem, type TodoOptions } from "./annotations.ts";
 
 export interface AnnotateOptions extends IndexOptions {
   stateDir: string;
@@ -18,6 +18,8 @@ export interface AnnotateOptions extends IndexOptions {
   input?: string;
   author: string;
   staleOnly: boolean;
+  /** prune：只报不删。 */
+  dryRun?: boolean;
   out: (text: string) => void;
 }
 
@@ -144,11 +146,34 @@ export async function annotate(sub: string, root: string, o: AnnotateOptions): P
     o.out(o.json ? JSON.stringify(a, null, 1) + "\n" : formatShow(a, o.staleOnly));
     return;
   }
+  if (sub === "prune") {
+    let exists: (node: string) => boolean;
+    if (base) {
+      const body = (await (await fetch(`${base}/api/annotations`)).json()) as { items: { node: string; status: string }[] };
+      const orphan = new Set(body.items.filter((i) => i.status === "orphan").map((i) => i.node));
+      exists = (node) => !orphan.has(node);
+    } else {
+      const table = nodeTable(await localWorld(root, indexOptions));
+      exists = (node) => table.has(node);
+    }
+    const r = pruneOrphans(o.stateDir, exists, o.dryRun ?? false);
+    if (o.json) {
+      o.out(JSON.stringify(r, null, 1) + "\n");
+      return;
+    }
+    if (!r.removed.length) {
+      o.out("没有「没对象」的标注，不用清。\n");
+      return;
+    }
+    o.out(`${o.dryRun ? "将删掉" : "删掉了"} ${r.removed.length} 条没对象的标注，留下 ${r.kept} 条（${r.file}）：\n`);
+    for (const a of r.removed) o.out(`  - ${a.node}  ${a.name}：${a.role}\n`);
+    return;
+  }
   if (sub === "skill") {
     const { installSkill } = await import("./skill-install.ts");
     const dst = installSkill("glassbox-annotate", root, { stateDir: o.stateDir, port: o.port, ...(o.overlayFile ? { overlayFile: o.overlayFile } : {}) });
     o.out(`已装到 ${dst}（开头写明了这台机器上怎么调用、状态目录在哪）\n新开的 Claude Code 会话里说"给画布写标注"就会用它。\n`);
     return;
   }
-  throw new Error("用法: glassbox annotate todo|set|show|skill [仓库]");
+  throw new Error("用法: glassbox annotate todo|set|show|prune|skill [仓库]");
 }
