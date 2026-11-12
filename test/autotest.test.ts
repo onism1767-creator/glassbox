@@ -92,9 +92,10 @@ test("合并：删掉的测试文件的旧用例也拿掉", () => {
 });
 
 /** 假的 pytest：按剧本给退出码，有 xml 就写到 --junitxml 指定的位置。 */
-function fakePytest(script: { code: number; xml?: string }[], calls: string[][]) {
-  return async (_cmd: string, args: string[]): Promise<{ code: number; tail: string }> => {
+function fakePytest(script: { code: number; xml?: string }[], calls: string[][], envs?: NodeJS.ProcessEnv[]) {
+  return async (_cmd: string, args: string[], _cwd?: string, env?: NodeJS.ProcessEnv): Promise<{ code: number; tail: string }> => {
     calls.push(args);
+    envs?.push(env ?? {});
     const step = script.shift() ?? { code: 0, xml: "<testsuite></testsuite>" };
     const out = args.find((a) => a.startsWith("--junitxml="))?.slice("--junitxml=".length);
     if (out && step.xml !== undefined) fs.writeFileSync(out, step.xml);
@@ -110,6 +111,7 @@ test("自动跑：用例 id 失效（退出码 4）退到按文件跑；两次�
     for (const f of ["tests/unit/test_a.py", "tests/unit/test_p.py", "tests/unit/test_b.py"]) fs.writeFileSync(path.join(root, f), "");
     const snap = snapshot(); // 快照固定不动：模拟重算还没跟上
     const calls: string[][] = [];
+    const envs: NodeJS.ProcessEnv[] = [];
     const events: string[] = [];
     let results = 0;
     const runner = fakePytest(
@@ -119,10 +121,11 @@ test("自动跑：用例 id 失效（退出码 4）退到按文件跑；两次�
         { code: 0, xml: `<testsuite timestamp="2026-10-27T11:00:05"><testcase classname="tests.unit.test_b" name="test_skip" time="0"/></testsuite>` },
       ],
       calls,
+      envs,
     );
     const at = new AutoTester(
       root,
-      { stateDir: state, python: "py", enabled: true, debounceMs: 0, run: runner },
+      { stateDir: state, python: "py", enabled: true, debounceMs: 0, env: { GEO_TEST_DB: "own-db" }, run: runner },
       { tests: () => snap, known: () => known, onEvent: (e) => events.push(e.text), onState: () => undefined, onResults: () => { results++; } },
     );
     const waitResults = (n: number) => new Promise<void>((resolve) => { const tick = () => (results >= n ? resolve() : setTimeout(tick, 10)); tick(); });
@@ -131,6 +134,8 @@ test("自动跑：用例 id 失效（退出码 4）退到按文件跑；两次�
     at.notice(["app/service.py"]);
     await waitResults(1);
     assert.ok(calls[0]!.some((a) => a.includes("::")), "第一次按用例 id 跑");
+    assert.equal(envs[0]?.GEO_TEST_DB, "own-db", "overlay 的 test_results.env 传给了 pytest（Q-8：用画布自己的测试库）");
+    assert.equal(envs[0]?.PYTHONDONTWRITEBYTECODE, "1");
     assert.deepEqual(calls[1]!.filter((a) => a.endsWith(".py")), ["tests/unit/test_a.py", "tests/unit/test_p.py"], "退出码 4 后按文件重跑");
     const first = readMerged();
     assert.equal(first.cases.find((c) => c.name === "test_bad")?.status, "passed");

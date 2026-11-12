@@ -96,7 +96,8 @@ export async function serve(root: string, options: ServeOptions): Promise<{ serv
       const journey = readJourneys(options.stateDir).items.find((j) => j.id === id);
       if (!journey) return json(res, 404, { error: `没有这条旅程：${id}` });
       try {
-        const v = await verifyJourney(root, w, journey, { stateDir: options.stateDir, ...(runtime.autoTester.options.python ? { python: runtime.autoTester.options.python } : {}), log: (l) => process.stdout.write(`[verify ${id}] ${l}\n`) });
+        const at = runtime.autoTester.options;
+        const v = await verifyJourney(root, w, journey, { stateDir: options.stateDir, ...(at.python ? { python: at.python } : {}), ...(at.env ? { env: at.env } : {}), log: (l) => process.stdout.write(`[verify ${id}] ${l}\n`) });
         writeVerification(options.stateDir, v);
         runtime.annotationsWritten();
         const view = journeysNow().items.find((j) => j.id === id);

@@ -87,6 +87,7 @@ export class Runtime {
         ...(python ? { python } : {}),
         enabled: options.autoTest ?? tr.auto ?? true,
         ...(tr.debounce_ms !== undefined ? { debounceMs: tr.debounce_ms } : {}),
+        ...(tr.env ? { env: tr.env } : {}),
         log: (l) => this.log(`[pytest] ${l}`),
       },
       {

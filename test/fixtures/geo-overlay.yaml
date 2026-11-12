@@ -45,3 +45,9 @@ names:
 # 架构书（T2 声明），算落地率：声明的文件、目录、类、函数对照代码
 architecture:
   file: GEO工具项目架构书v0.4.md
+
+# 画布跑测试（全量、自动跑相关、旅程验证）用自己的测试库，不和 GEO 会话手跑的撞（错误库 Q-8，用户 2026-11-11 定）。
+# 要 GEO 的 tests/unit/conftest.py 读 GEO_TEST_DB（缺省 geo_tool_test）；库不存在 conftest 自己建。
+test_results:
+  env:
+    GEO_TEST_DB: geo_tool_glassbox

@@ -146,6 +146,8 @@ export interface AutoTestOptions {
   /** 最后一次改动后等多久再跑（合并连续改动）。 */
   debounceMs?: number;
   timeoutMs?: number;
+  /** 额外环境变量（overlay 的 test_results.env），比如让测试用画布自己的测试库，不和人手跑的撞（Q-8）。 */
+  env?: Record<string, string>;
   log?: (line: string) => void;
   /** 跑命令的函数；测试里换成假的。 */
   run?: typeof runCommand;
@@ -287,7 +289,7 @@ export class AutoTester {
       kind: "autotest",
       text: `自动跑相关测试：${selection.estimated ? `约 ${selection.estimated} 个用例` : `${selection.args.length} 个目标`}（${describe(selection)}）…`,
     });
-    const env = { ...process.env, PYTHONDONTWRITEBYTECODE: "1" };
+    const env = { ...process.env, PYTHONDONTWRITEBYTECODE: "1", ...(this.options.env ?? {}) };
     const run = this.options.run ?? runCommand;
     const pytest = (args: string[]) => run(python, ["-m", "pytest", "-p", "no:cacheprovider", "-q", `--junitxml=${junit}`, ...args], this.root, env, (l) => this.log(l), this.options.timeoutMs ?? 600_000);
     fs.rmSync(junit, { force: true });

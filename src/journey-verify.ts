@@ -10,6 +10,8 @@ import type { Journey, Verification } from "./journeys.ts";
 export interface VerifyOptions {
   stateDir: string;
   python?: string;
+  /** 额外环境变量（overlay 的 test_results.env）。 */
+  env?: Record<string, string>;
   log?: (line: string) => void;
   timeoutMs?: number;
 }
@@ -27,7 +29,7 @@ export async function verifyJourney(root: string, world: NodeWorld, journey: Jou
   let plan = buildCoverageConfig(root);
   let rc = path.join(dir, plan.file);
   fs.writeFileSync(rc, plan.text, "utf8");
-  const env = { ...process.env, PYTHONDONTWRITEBYTECODE: "1", COVERAGE_FILE: path.join(dir, ".coverage"), COVERAGE_RCFILE: rc };
+  const env = { ...process.env, PYTHONDONTWRITEBYTECODE: "1", ...(options.env ?? {}), COVERAGE_FILE: path.join(dir, ".coverage"), COVERAGE_RCFILE: rc };
   if (plan.base !== DEFAULT_COVERAGE_BASE) {
     const check = await runCommand(python, ["-m", "coverage", "debug", "config"], root, env, undefined, 60_000);
     if (check.code !== 0) {

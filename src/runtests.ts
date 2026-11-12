@@ -11,6 +11,8 @@ export interface RunTestsOptions {
   python?: string;
   coverage?: boolean;
   extraArgs?: string[];
+  /** 额外环境变量（overlay 的 test_results.env），比如 GEO_TEST_DB 让测试用画布自己的库。 */
+  env?: Record<string, string>;
   log?: (line: string) => void;
 }
 
@@ -197,7 +199,7 @@ export async function runTests(root: string, options: RunTestsOptions): Promise<
   const junit = path.join(dir, "junit.xml");
   const coverageJson = path.join(dir, "coverage.json");
   const pytestArgs = ["-p", "no:cacheprovider", "-q", `--junitxml=${junit}`, ...(options.extraArgs ?? [])];
-  const env = { ...process.env, PYTHONDONTWRITEBYTECODE: "1" };
+  const env = { ...process.env, PYTHONDONTWRITEBYTECODE: "1", ...(options.env ?? {}) };
   const probe = await probeModule(python, "pytest", root);
   if (probe === "no-interpreter") throw new Error(`找不到 Python 解释器：${python}`);
   if (probe === "missing") throw new Error(`${python} 里没有 pytest`);

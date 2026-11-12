@@ -34,7 +34,8 @@ export interface Overlay {
    * 测试结果文件的位置（相对仓库）；缺省找 状态目录/test-results 与仓库根。
    * auto：改了文件后自动只跑相关测试（缺省开，前提是找得到带 pytest 的解释器）；python：解释器路径；debounce_ms：最后一次改动后等多久再跑。
    */
-  test_results?: { junit?: string; coverage?: string; auto?: boolean; python?: string; debounce_ms?: number };
+  /** env：起 pytest 时额外的环境变量，比如让被观测项目的测试用画布自己的测试库（错误库 Q-8）。 */
+  test_results?: { junit?: string; coverage?: string; auto?: boolean; python?: string; debounce_ms?: number; env?: Record<string, string> };
 }
 
 export interface WordsFromYaml {
@@ -95,6 +96,7 @@ export function readOverlay(root: string, override?: string): Overlay {
           ...(typeof o.test_results.auto === "boolean" ? { auto: o.test_results.auto } : {}),
           ...(typeof o.test_results.python === "string" ? { python: o.test_results.python } : {}),
           ...(typeof o.test_results.debounce_ms === "number" ? { debounce_ms: o.test_results.debounce_ms } : {}),
+          ...(o.test_results.env && typeof o.test_results.env === "object" ? { env: stringMap(o.test_results.env) } : {}),
         }
       : undefined,
   };

@@ -11,6 +11,8 @@ import type { NodeWorld } from "./annotations.ts";
 export interface JourneyCliOptions extends IndexOptions {
   stateDir: string;
   python?: string;
+  /** 额外环境变量（overlay 的 test_results.env），本地验证旅程时传给 pytest。 */
+  env?: Record<string, string>;
   port: number;
   noServer: boolean;
   json: boolean;
@@ -126,7 +128,7 @@ export async function journeyCommand(sub: string, root: string, o: JourneyCliOpt
     const { world, snapshot } = await local(root, o);
     const journey = readJourneys(o.stateDir).items.find((j) => j.id === o.id);
     if (!journey) throw new Error(`没有这条旅程：${o.id}`);
-    const v = await verifyJourney(root, world, journey, { stateDir: o.stateDir, ...(o.python ? { python: o.python } : {}), log: (l) => o.out(l + "\n") });
+    const v = await verifyJourney(root, world, journey, { stateDir: o.stateDir, ...(o.python ? { python: o.python } : {}), ...(o.env ? { env: o.env } : {}), log: (l) => o.out(l + "\n") });
     writeVerification(o.stateDir, v);
     const view = snapshot().items.find((j) => j.id === o.id);
     o.out(o.json ? JSON.stringify({ via: "local", verification: v, status: view?.status, statusText: view?.statusText }, null, 1) + "\n" : `跑了 ${v.passed + v.failed} 个测试（通过 ${v.passed}、失败 ${v.failed}），碰到 ${v.touched.length} 个文件，${(v.elapsedMs / 1000).toFixed(1)} 秒\n结论：${view?.statusText}\n`);
